@@ -1,0 +1,91 @@
+{
+  "nombre": "LAVALLE 2880",
+  "direccion": "",
+  "unidades": [
+    {
+      "unidad": "1-A",
+      "nombre": "",
+      "topic": "portero-144511579711901406"
+    },
+    {
+      "unidad": "1-B",
+      "nombre": "",
+      "topic": "portero-195711943735724479"
+    },
+    {
+      "unidad": "2-A",
+      "nombre": "",
+      "topic": "portero-371776893736625329"
+    },
+    {
+      "unidad": "2-B",
+      "nombre": "",
+      "topic": "portero-147050186917092760"
+    },
+    {
+      "unidad": "2-C",
+      "nombre": "",
+      "topic": "portero-651758486791479394"
+    },
+    {
+      "unidad": "3-A",
+      "nombre": "",
+      "topic": "portero-325335840225148033"
+    },
+    {
+      "unidad": "3-B",
+      "nombre": "",
+      "topic": "portero-100963647340255987"
+    },
+    {
+      "unidad": "3-C",
+      "nombre": "",
+      "topic": "portero-155272767775573817"
+    },
+    {
+      "unidad": "4-A",
+      "nombre": "",
+      "topic": "portero-415372202731170040"
+    },
+    {
+      "unidad": "4-B",
+      "nombre": "",
+      "topic": "portero-672830321877292961"
+    },
+    {
+      "unidad": "4-C",
+      "nombre": "",
+      "topic": "portero-336293295335772764"
+    },
+    {
+      "unidad": "5-A",
+      "nombre": "",
+      "topic": "portero-163019295752629759"
+    },
+    {
+      "unidad": "5-B",
+      "nombre": "",
+      "topic": "portero-199895258631126595"
+    },
+    {
+      "unidad": "5-C",
+      "nombre": "",
+      "topic": "portero-466018915654856512"
+    },
+    {
+      "unidad": "6-A",
+      "nombre": "",
+      "topic": "portero-411338274326589492"
+    },
+    {
+      "unidad": "6-B",
+      "nombre": "",
+      "topic": "portero-276146110737364082"
+    },
+    {
+      "unidad": "6-C",
+      "nombre": "",
+      "topic": "portero-150419479641067740"
+    }
+  ]
+}
