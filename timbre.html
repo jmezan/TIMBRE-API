@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Timbre</title>
+<style>
+  :root { --bg:#f6f4ef; --fg:#1d1d1b; --accent:#e4572e; --muted:#6b6b66; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg);
+         min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .card { width:100%; max-width:420px; text-align:center; }
+  h1 { font-size:1.6rem; margin:0 0 4px; }
+  p { color:var(--muted); margin:0 0 20px; line-height:1.4; }
+  input, textarea { width:100%; padding:12px 14px; border:1px solid #d6d3cb; border-radius:12px; font:inherit; margin-bottom:10px; background:#fff; }
+  textarea { resize:none; height:70px; }
+  .bell { width:190px; height:190px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:1.2rem;
+          font-weight:700; margin:16px auto; display:flex; flex-direction:column; align-items:center; justify-content:center;
+          gap:6px; cursor:pointer; box-shadow:0 10px 30px rgba(228,87,46,.35); transition:transform .1s; }
+  .bell:active { transform:scale(.96); }
+  .bell:disabled { background:#b9b5ab; box-shadow:none; cursor:default; }
+  .bell svg { width:56px; height:56px; }
+  .status { min-height:1.4em; font-weight:600; }
+  .ok { color:#2a7d46; } .err { color:#b3261e; }
+  .btn { display:inline-block; padding:12px 18px; border-radius:12px; background:var(--fg); color:#fff; border:none; font:inherit; cursor:pointer; text-decoration:none; margin:4px; }
+  .box { background:#fff; border-radius:16px; padding:18px; margin:14px 0; text-align:left; }
+  .box h2 { font-size:1rem; margin:0 0 8px; }
+  code { word-break:break-all; background:#f0eee8; padding:2px 6px; border-radius:6px; font-size:.85rem; }
+  #qr { display:block; margin:10px auto; width:240px; height:240px; }
+  small { color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="card" id="app"></div>
+
+<script>
+// ==== CONFIGURACIÓN ====
+// Servidor de notificaciones (gratis). Podés usar tu propio servidor ntfy si querés.
+const NTFY = "https://ntfy.sh";
+const COOLDOWN_SEG = 30; // evita que toquen 20 veces seguidas
+
+const params = new URLSearchParams(location.search);
+const topic = params.get("t");
+const casa  = params.get("n") || "la casa";
+const app = document.getElementById("app");
+
+if (topic) visitante(); else configuracion();
+
+// ---------- Página que ve el visitante ----------
+function visitante() {
+  app.innerHTML = `
+    <h1>Bienvenido a ${esc(casa)}</h1>
+    <p>Tocá el botón para avisar que estás en la puerta.</p>
+    <input id="nombre" placeholder="Tu nombre (opcional)" maxlength="40">
+    <textarea id="msg" placeholder="Mensaje (opcional): delivery, visita, etc." maxlength="140"></textarea>
+    <button class="bell" id="bell">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>
+      Tocar timbre
+    </button>
+    <div class="status" id="st"></div>`;
+  const bell = document.getElementById("bell"), st = document.getElementById("st");
+
+  bell.onclick = async () => {
+    const nombre = document.getElementById("nombre").value.trim();
+    const msg = document.getElementById("msg").value.trim();
+    bell.disabled = true; st.className = "status"; st.textContent = "Avisando…";
+    let cuerpo = (nombre ? nombre + " está en la puerta" : "Alguien está en la puerta");
+    if (msg) cuerpo += "\n💬 " + msg;
+    try {
+      const r = await fetch(`${NTFY}/${encodeURIComponent(topic)}`, {
+        method: "POST",
+        body: cuerpo,
+        headers: { "Title": "🔔 Timbre", "Priority": "high", "Tags": "bell" }
+      });
+      if (!r.ok) throw new Error(r.status);
+      st.className = "status ok"; st.textContent = "¡Listo! Ya avisamos. Esperá un momento 🙂";
+      cuentaRegresiva(bell);
+    } catch (e) {
+      st.className = "status err"; st.textContent = "No se pudo avisar. Revisá tu conexión e intentá de nuevo.";
+      bell.disabled = false;
+    }
+  };
+}
+
+function cuentaRegresiva(bell) {
+  let s = COOLDOWN_SEG;
+  const txt = bell.lastChild;
+  const t = setInterval(() => {
+    txt.textContent = ` Esperá ${s--}s`;
+    if (s < 0) { clearInterval(t); txt.textContent = " Tocar timbre"; bell.disabled = false; }
+  }, 1000);
+}
+
+// ---------- Página de configuración (para vos) ----------
+function configuracion() {
+  const guardado = (() => { try { return localStorage.getItem("timbre_topic"); } catch { return null; } })();
+  const nuevo = guardado || "timbre-" + crypto.getRandomValues(new Uint32Array(2)).join("").slice(0, 14);
+  try { localStorage.setItem("timbre_topic", nuevo); } catch {}
+
+  app.innerHTML = `
+    <h1>Configurá tu timbre QR</h1>
+    <p>Hacelo una sola vez. Después imprimí el QR y pegalo en la puerta.</p>
+
+    <div class="box">
+      <h2>1. Instalá la app ntfy en tu celular</h2>
+      <small>Gratis, Android (Play Store / F-Droid) e iPhone (App Store).</small>
+    </div>
+
+    <div class="box">
+      <h2>2. Suscribite a tu canal secreto</h2>
+      <small>En la app tocá “+” y pegá este nombre:</small><br>
+      <code id="topic">${nuevo}</code>
+      <div style="text-align:center;margin-top:10px">
+        <button class="btn" onclick="navigator.clipboard.writeText('${nuevo}')">Copiar</button>
+      </div>
+      <small>Que sea difícil de adivinar: cualquiera que lo sepa puede leer o mandar avisos.</small>
+    </div>
+
+    <div class="box">
+      <h2>3. Nombre que verá el visitante</h2>
+      <input id="nombre" placeholder="Ej: Familia Gómez" maxlength="40">
+    </div>
+
+    <div class="box" style="text-align:center">
+      <h2>4. Tu QR</h2>
+      <img id="qr" alt="Código QR del timbre">
+      <code id="url"></code><br>
+      <a class="btn" id="probar" target="_blank">Probar timbre</a>
+      <a class="btn" id="bajar" download="timbre-qr.png">Descargar QR</a>
+    </div>`;
+
+  const inp = document.getElementById("nombre");
+  const actualizar = () => {
+    const base = location.href.split("?")[0];
+    const n = inp.value.trim();
+    const url = `${base}?t=${encodeURIComponent(nuevo)}${n ? "&n=" + encodeURIComponent(n) : ""}`;
+    const qr = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=20&data=${encodeURIComponent(url)}`;
+    document.getElementById("url").textContent = url;
+    document.getElementById("qr").src = qr;
+    document.getElementById("bajar").href = qr;
+    document.getElementById("probar").href = url;
+  };
+  inp.oninput = actualizar; actualizar();
+}
+
+function esc(s) { return s.replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+</script>
+</body>
+</html>
