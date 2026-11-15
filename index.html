@@ -29,7 +29,13 @@
   code { word-break:break-all; background:#f0eee8; padding:2px 6px; border-radius:6px; font-size:.85rem; }
   #qr { display:block; margin:10px auto; width:240px; height:240px; }
   small { color:var(--muted); }
+  .btn.video { background:#2f6fde; font-size:1.05rem; padding:14px 22px; }
+  .btn.red { background:#c62828; }
+  video { width:100%; border-radius:16px; background:#000; margin:10px 0; max-height:60vh; object-fit:cover; }
+  #yo { width:110px; position:fixed; right:16px; bottom:16px; margin:0; z-index:5; }
+  .hide { display:none !important; }
 </style>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 </head>
 <body>
 <div class="card" id="app"></div>
@@ -46,7 +52,11 @@ const casa  = params.get("n") || "la casa";
 const telDueno = (params.get("c") || "").replace(/[^\d+]/g, ""); // tu número (opcional)
 const app = document.getElementById("app");
 
-if (topic) visitante(); else configuracion();
+const atenderId = params.get("atender");
+
+if (topic && atenderId) atender();
+else if (topic) visitante();
+else configuracion();
 
 // ---------- Página que ve el visitante ----------
 function visitante() {
@@ -61,11 +71,21 @@ function visitante() {
       Tocar timbre
     </button>
     <div class="status" id="st"></div>
+    <p style="margin:18px 0 6px">¿Querés hablar con alguien de adentro?</p>
+    <button class="btn video" id="vbtn">📹 Videollamada</button>
+    <div id="vzone" class="hide">
+      <video id="yo" autoplay playsinline muted></video>
+      <audio id="ellos" autoplay playsinline></audio>
+      <div class="status" id="vst"></div>
+      <button class="btn hide" id="oir">🔊 Tocá para escuchar</button>
+      <button class="btn red" id="cortar">Cortar</button>
+    </div>
     ${telDueno ? `
     <p style="margin:18px 0 6px">¿Preferís hablar?</p>
     <a class="btn" href="tel:${telDueno}">📞 Llamar</a>
     <a class="btn wa" href="https://wa.me/${telDueno.replace("+", "")}" target="_blank">💬 WhatsApp</a>` : ""}`;
   const bell = document.getElementById("bell"), st = document.getElementById("st");
+  document.getElementById("vbtn").onclick = videollamadaVisitante;
 
   bell.onclick = async () => {
     const nombre = document.getElementById("nombre").value.trim();
@@ -90,6 +110,117 @@ function visitante() {
       st.className = "status err"; st.textContent = "No se pudo avisar. Revisá tu conexión e intentá de nuevo.";
       bell.disabled = false;
     }
+  };
+}
+
+// ---------- Videollamada: lado del visitante ----------
+// El visitante abre su cámara y queda esperando. Te llega una notificación con
+// el botón "Atender", que abre esta misma página en modo atender.
+async function videollamadaVisitante() {
+  const $ = id => document.getElementById(id);
+  const vst = $("vst");
+  $("vbtn").classList.add("hide"); $("vzone").classList.remove("hide");
+  vst.className = "status"; vst.textContent = "Pidiendo permiso de cámara y micrófono…";
+
+  let stream, peer, timeout;
+  const terminar = (texto) => {
+    clearTimeout(timeout);
+    try { peer && peer.destroy(); } catch {}
+    try { stream && stream.getTracks().forEach(t => t.stop()); } catch {}
+    $("yo").srcObject = null;
+    vst.textContent = texto || "Llamada terminada.";
+    $("cortar").classList.add("hide"); $("oir").classList.add("hide");
+    $("vbtn").classList.remove("hide"); $("vbtn").textContent = "📹 Volver a llamar";
+  };
+  $("cortar").classList.remove("hide");
+  $("cortar").onclick = () => terminar();
+
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true });
+  } catch (e) {
+    return terminar("Necesitamos permiso de cámara y micrófono para la videollamada.");
+  }
+  $("yo").srcObject = stream;
+
+  if (typeof Peer === "undefined") return terminar("No se pudo cargar la videollamada. Probá de nuevo.");
+  const miId = "timbre-" + crypto.getRandomValues(new Uint32Array(3)).join("");
+  peer = new Peer(miId);
+
+  peer.on("open", async (id) => {
+    vst.textContent = "Llamando… esperá que atiendan.";
+    const link = `${location.href.split("?")[0]}?t=${encodeURIComponent(topic)}&n=${encodeURIComponent(casa)}&atender=${encodeURIComponent(id)}`;
+    const nombre = $("nombre").value.trim();
+    const q = new URLSearchParams({
+      title: "Videollamada - " + casa, priority: "urgent", tags: "video_camera",
+      actions: `view, Atender, ${link}`, click: link
+    });
+    try {
+      const r = await fetch(`${NTFY}/${encodeURIComponent(topic)}?${q}`, {
+        method: "POST", body: (nombre || "Alguien") + " quiere hablar por videollamada desde la puerta"
+      });
+      if (!r.ok) throw 0;
+    } catch { return terminar("No se pudo avisar. Revisá tu conexión."); }
+    timeout = setTimeout(() => terminar("No atendieron. Probá tocar el timbre o volvé a llamar."), 120000);
+  });
+
+  peer.on("call", (call) => {
+    clearTimeout(timeout);
+    call.answer(stream);
+    vst.className = "status ok"; vst.textContent = "¡Conectado! Ya te están viendo y escuchando.";
+    call.on("stream", (remoto) => {
+      const a = $("ellos"); a.srcObject = remoto;
+      a.play().catch(() => { $("oir").classList.remove("hide"); $("oir").onclick = () => { a.play(); $("oir").classList.add("hide"); }; });
+    });
+    call.on("close", () => terminar("La llamada terminó."));
+  });
+  peer.on("error", () => terminar("Hubo un problema con la conexión. Probá de nuevo."));
+}
+
+// ---------- Videollamada: lado tuyo (al tocar "Atender") ----------
+function atender() {
+  app.innerHTML = `
+    <h1>Puerta de ${esc(casa)}</h1>
+    <p id="ast">Alguien quiere hablar con vos.</p>
+    <video id="ellos" autoplay playsinline class="hide"></video>
+    <button class="btn video" id="abtn">📞 Atender</button>
+    <div id="ctrl" class="hide">
+      <button class="btn" id="mute">🎙️ Silenciar</button>
+      <button class="btn red" id="colgar">Colgar</button>
+    </div>`;
+  const $ = id => document.getElementById(id);
+  let peer, stream, call;
+  const fin = (t) => {
+    try { call && call.close(); } catch {}
+    try { peer && peer.destroy(); } catch {}
+    try { stream && stream.getTracks().forEach(x => x.stop()); } catch {}
+    $("ast").textContent = t || "Llamada terminada.";
+    $("ctrl").classList.add("hide"); $("ellos").classList.add("hide");
+  };
+
+  $("abtn").onclick = async () => {
+    $("abtn").classList.add("hide");
+    $("ast").textContent = "Conectando…";
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch { return fin("Necesitás dar permiso de micrófono para hablar."); }
+    if (typeof Peer === "undefined") return fin("No se pudo cargar la videollamada.");
+    peer = new Peer();
+    peer.on("open", () => {
+      call = peer.call(atenderId, stream);
+      call.on("stream", (remoto) => {
+        const v = $("ellos"); v.srcObject = remoto; v.classList.remove("hide");
+        v.play().catch(() => {});
+        $("ast").textContent = "Conectado. El visitante te escucha, pero no te ve.";
+        $("ctrl").classList.remove("hide");
+      });
+      call.on("close", () => fin("El visitante cortó."));
+    });
+    peer.on("error", (e) => fin(e && e.type === "peer-unavailable"
+      ? "El visitante ya cortó o se fue." : "No se pudo conectar. Probá de nuevo."));
+  };
+  $("colgar").onclick = () => fin("Colgaste la llamada.");
+  $("mute").onclick = () => {
+    const t = stream.getAudioTracks()[0]; t.enabled = !t.enabled;
+    $("mute").textContent = t.enabled ? "🎙️ Silenciar" : "🔇 Activar micrófono";
   };
 }
 
