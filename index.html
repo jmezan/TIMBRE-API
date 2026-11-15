@@ -67,10 +67,10 @@ function visitante() {
     let cuerpo = (nombre ? nombre + " está en la puerta" : "Alguien está en la puerta");
     if (msg) cuerpo += "\n💬 " + msg;
     try {
-      const r = await fetch(`${NTFY}/${encodeURIComponent(topic)}`, {
+      const q = new URLSearchParams({ title: "Timbre - " + casa, priority: "high", tags: "bell" });
+      const r = await fetch(`${NTFY}/${encodeURIComponent(topic)}?${q}`, {
         method: "POST",
-        body: cuerpo,
-        headers: { "Title": "🔔 Timbre", "Priority": "high", "Tags": "bell" }
+        body: cuerpo
       });
       if (!r.ok) throw new Error(r.status);
       st.className = "status ok"; st.textContent = "¡Listo! Ya avisamos. Esperá un momento 🙂";
