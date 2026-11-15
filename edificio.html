@@ -1,1 +1,382 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Portero</title>
+<style>
+  :root { --bg:#f4f3ef; --fg:#1b1b1a; --accent:#e4572e; --blue:#2f6fde; --muted:#6b6b66; --line:#dedbd3; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--fg); min-height:100vh; }
+  .wrap { max-width:480px; margin:0 auto; padding:28px 20px 40px; text-align:center; }
+  h1 { font-size:1.55rem; margin:0 0 4px; }
+  h2 { font-size:1rem; margin:0 0 10px; }
+  p { color:var(--muted); margin:0 0 18px; line-height:1.4; }
+  small { color:var(--muted); line-height:1.35; }
+  input, textarea { width:100%; padding:12px 14px; border:1px solid var(--line); border-radius:12px; font:inherit; margin-bottom:10px; background:#fff; }
+  textarea { resize:none; height:64px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:10px; text-align:left; }
+  .unit { background:#fff; border:1px solid var(--line); border-radius:14px; padding:14px; cursor:pointer; font:inherit; text-align:left; }
+  .unit:active { transform:scale(.98); }
+  .unit b { display:block; font-size:1.1rem; }
+  .unit span { color:var(--muted); font-size:.85rem; }
+  .bell { width:180px; height:180px; border-radius:50%; border:none; background:var(--accent); color:#fff; font-size:1.15rem; font-weight:700;
+          margin:16px auto; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:6px; cursor:pointer;
+          box-shadow:0 10px 30px rgba(228,87,46,.35); }
+  .bell:active { transform:scale(.96); }
+  .bell:disabled { background:#b9b5ab; box-shadow:none; }
+  .bell svg { width:52px; height:52px; }
+  .status { min-height:1.4em; font-weight:600; margin:6px 0; }
+  .ok { color:#2a7d46; } .err { color:#b3261e; }
+  .btn { display:inline-block; padding:11px 16px; border-radius:12px; background:var(--fg); color:#fff; border:none; font:inherit; cursor:pointer; text-decoration:none; margin:4px; }
+  .btn.blue { background:var(--blue); } .btn.red { background:#c62828; } .btn.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  .btn.sm { padding:7px 11px; font-size:.85rem; }
+  .back { background:none; border:none; color:var(--blue); font:inherit; cursor:pointer; padding:0; margin-bottom:14px; }
+  .box { background:#fff; border-radius:16px; padding:18px; margin:14px 0; text-align:left; }
+  .row { display:grid; grid-template-columns:80px 1fr auto; gap:8px; align-items:start; border-top:1px solid var(--line); padding-top:10px; margin-top:10px; }
+  .row input { margin:0; padding:9px 10px; }
+  code { word-break:break-all; background:#f0eee8; padding:2px 6px; border-radius:6px; font-size:.8rem; }
+  video { width:100%; border-radius:16px; background:#000; margin:10px 0; max-height:60vh; object-fit:cover; }
+  #yo { width:110px; position:fixed; right:16px; bottom:16px; margin:0; z-index:5; }
+  #qr { display:block; margin:10px auto; width:240px; height:240px; }
+  .hide { display:none !important; }
+</style>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+</head>
+<body>
+<div class="wrap" id="app"></div>
 
+<script>
+// ==== CONFIGURACIÓN ====
+const NTFY = "https://ntfy.sh";
+const COOLDOWN_SEG = 30;
+const ESPERA_VIDEO_SEG = 120;
+
+const params = new URLSearchParams(location.search);
+const ARCHIVO = params.get("e") || "edificio.json";   // permite varios edificios en el mismo repo
+const app = document.getElementById("app");
+const $ = id => document.getElementById(id);
+const BASE = location.href.split("?")[0];
+const BELL_SVG = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>`;
+
+if (params.has("admin")) admin();
+else if (params.get("atender")) atender();
+else portero();
+
+// =====================================================================
+//  VISITANTE: elige departamento y toca el timbre (con videollamada)
+// =====================================================================
+async function portero() {
+  app.innerHTML = `<p>Cargando…</p>`;
+  let ed;
+  try {
+    const r = await fetch(ARCHIVO + "?v=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) throw 0;
+    ed = await r.json();
+  } catch {
+    app.innerHTML = `<h1>Portero no configurado</h1>
+      <p>Falta el archivo <code>${esc(ARCHIVO)}</code> en el repositorio.</p>
+      <a class="btn" href="${BASE}?admin">Ir a configuración</a>`;
+    return;
+  }
+  document.title = ed.nombre || "Portero";
+  const unidades = (ed.unidades || []).filter(u => u.topic);
+
+  const lista = (filtro = "") => {
+    const f = filtro.toLowerCase();
+    return unidades.map((u, i) => ({ u, i }))
+      .filter(({ u }) => !f || (u.unidad + " " + (u.nombre || "")).toLowerCase().includes(f))
+      .map(({ u, i }) => `<button class="unit" data-i="${i}"><b>${esc(u.unidad)}</b><span>${esc(u.nombre || "")}</span></button>`)
+      .join("") || `<p>No hay resultados.</p>`;
+  };
+
+  app.innerHTML = `
+    <h1>${esc(ed.nombre || "Bienvenido")}</h1>
+    ${ed.direccion ? `<p style="margin-bottom:6px">${esc(ed.direccion)}</p>` : ""}
+    <p>Elegí a quién querés llamar.</p>
+    ${unidades.length > 8 ? `<input id="buscar" placeholder="Buscar departamento o nombre…">` : ""}
+    <div class="grid" id="grid">${lista()}</div>`;
+
+  const bind = () => app.querySelectorAll(".unit").forEach(b => b.onclick = () => timbreUnidad(ed, unidades[+b.dataset.i]));
+  bind();
+  if ($("buscar")) $("buscar").oninput = e => { $("grid").innerHTML = lista(e.target.value); bind(); };
+}
+
+function timbreUnidad(ed, u) {
+  app.innerHTML = `
+    <button class="back" id="volver">← Volver</button>
+    <h1>${esc(u.unidad)}</h1>
+    <p>${u.nombre ? esc(u.nombre) + " · " : ""}${esc(ed.nombre || "")}</p>
+    <input id="nombre" placeholder="Tu nombre (opcional)" maxlength="40">
+    <input id="telvis" type="tel" inputmode="tel" placeholder="Tu teléfono (opcional)" maxlength="20">
+    <textarea id="msg" placeholder="Mensaje (opcional): delivery, visita, etc." maxlength="140"></textarea>
+    <button class="bell" id="bell">${BELL_SVG}<span id="bellTxt">Tocar timbre</span></button>
+    <div id="vzone" class="hide">
+      <video id="yo" autoplay playsinline muted></video>
+      <audio id="ellos" autoplay playsinline></audio>
+      <button class="btn hide" id="oir">🔊 Tocá para escuchar</button>
+      <button class="btn red" id="cortar">Cortar</button>
+    </div>
+    <div class="status" id="st"></div>
+    <small>Al tocar, se activa tu cámara para que te atiendan por videollamada.</small>`;
+  let enCurso = false;
+  $("volver").onclick = () => { if (!enCurso || confirmar()) portero(); };
+  $("bell").onclick = () => { enCurso = true; tocarTimbre(ed, u, () => enCurso = false); };
+}
+function confirmar() { $("cortar") && $("cortar").click(); return true; }
+
+async function tocarTimbre(ed, u, alTerminar) {
+  const bell = $("bell"), st = $("st");
+  const estado = (t, c) => { st.className = "status " + (c || ""); st.textContent = t; };
+  const nombre = $("nombre").value.trim(), msg = $("msg").value.trim();
+  const telVis = $("telvis").value.replace(/[^\d+]/g, "");
+  let cuerpo = (nombre ? nombre : "Alguien") + " toca el timbre de " + u.unidad;
+  if (msg) cuerpo += "\n💬 " + msg;
+  if (telVis) cuerpo += "\n📞 " + telVis;
+
+  const avisar = async (link) => {
+    const acc = [];
+    if (link) acc.push(`view, Atender video, ${link}`);
+    if (telVis) acc.push(`view, Llamar, tel:${telVis}`, `view, WhatsApp, https://wa.me/${telVis.replace("+", "")}`);
+    const q = new URLSearchParams({
+      title: `Timbre ${u.unidad} - ${ed.nombre || "Edificio"}`,
+      priority: link ? "urgent" : "high", tags: link ? "bell,video_camera" : "bell"
+    });
+    if (acc.length) q.set("actions", acc.slice(0, 3).join("; "));
+    if (link) q.set("click", link);
+    const r = await fetch(`${NTFY}/${encodeURIComponent(u.topic)}?${q}`, {
+      method: "POST", body: cuerpo + (link ? "\n📹 Esperando en videollamada" : "")
+    });
+    if (!r.ok) throw new Error(r.status);
+  };
+  const soloTimbre = async (sinVideo) => {
+    estado("Avisando…");
+    try { await avisar(null); estado("¡Listo! Ya avisamos" + (sinVideo ? " (sin video)" : "") + ". Esperá un momento 🙂", "ok"); }
+    catch { estado("No se pudo avisar. Revisá tu conexión e intentá de nuevo.", "err"); bell.disabled = false; alTerminar(); return; }
+    cuentaRegresiva(bell); alTerminar();
+  };
+
+  bell.disabled = true;
+  estado("Activando cámara y micrófono…");
+  let stream, peer, timeout, avisado = false, cerrado = false;
+  const terminar = (t, c) => {
+    if (cerrado) return; cerrado = true;
+    clearTimeout(timeout);
+    try { peer && peer.destroy(); } catch {}
+    try { stream && stream.getTracks().forEach(x => x.stop()); } catch {}
+    $("yo").srcObject = null; $("vzone").classList.add("hide");
+    estado(t || "Llamada terminada.", c);
+    cuentaRegresiva(bell); alTerminar();
+  };
+
+  try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: true }); }
+  catch { return soloTimbre(true); }
+  if (typeof Peer === "undefined") { stream.getTracks().forEach(x => x.stop()); return soloTimbre(true); }
+
+  $("vzone").classList.remove("hide"); $("yo").srcObject = stream;
+  $("cortar").onclick = () => terminar("Cortaste la llamada.");
+  estado("Conectando…");
+  peer = new Peer("portero-" + crypto.getRandomValues(new Uint32Array(3)).join(""));
+
+  peer.on("open", async (id) => {
+    const link = `${BASE}?atender=${encodeURIComponent(id)}&n=${encodeURIComponent(u.unidad + " · " + (ed.nombre || ""))}`;
+    try { await avisar(link); avisado = true; }
+    catch { return terminar("No se pudo avisar. Revisá tu conexión e intentá de nuevo.", "err"); }
+    estado(`🔔 Llamando a ${u.unidad}… esperá que te atiendan.`, "ok");
+    timeout = setTimeout(() => terminar("No atendieron la videollamada, pero el aviso ya llegó."), ESPERA_VIDEO_SEG * 1000);
+  });
+
+  // Quien atiende se conecta; el visitante lo llama con video + audio.
+  peer.on("connection", (conn) => {
+    clearTimeout(timeout);
+    estado("Conectando video…");
+    const iniciar = () => {
+      const call = peer.call(conn.peer, stream);
+      call.on("stream", (remoto) => {
+        estado("¡Conectado! Ya te están viendo y escuchando.", "ok");
+        const a = $("ellos"); a.srcObject = remoto;
+        a.play().catch(() => { $("oir").classList.remove("hide"); $("oir").onclick = () => { a.play(); $("oir").classList.add("hide"); }; });
+      });
+      call.on("close", () => terminar("La llamada terminó. ¡Gracias!"));
+    };
+    if (conn.open) iniciar(); else conn.on("open", iniciar);
+    conn.on("close", () => terminar("La llamada terminó. ¡Gracias!"));
+  });
+
+  peer.on("error", () => {
+    if (avisado) return terminar("Se cortó la videollamada, pero el aviso ya llegó.");
+    cerrado = true; clearTimeout(timeout);
+    try { peer.destroy(); } catch {}
+    stream.getTracks().forEach(x => x.stop());
+    $("vzone").classList.add("hide");
+    soloTimbre(true);
+  });
+}
+
+function cuentaRegresiva(bell) {
+  let s = COOLDOWN_SEG;
+  const txt = $("bellTxt");
+  const t = setInterval(() => {
+    if (!document.body.contains(bell)) return clearInterval(t);
+    txt.textContent = `Esperá ${s--}s`;
+    if (s < 0) { clearInterval(t); txt.textContent = "Tocar timbre"; bell.disabled = false; }
+  }, 1000);
+}
+
+// =====================================================================
+//  VECINO: atiende desde la notificación
+// =====================================================================
+function atender() {
+  const id = params.get("atender"), n = params.get("n") || "Portero";
+  app.innerHTML = `
+    <h1>${esc(n)}</h1>
+    <p id="ast">Hay alguien en la puerta.</p>
+    <video id="ellos" autoplay playsinline class="hide"></video>
+    <button class="btn blue" id="abtn" style="font-size:1.1rem;padding:14px 26px">📞 Atender</button>
+    <div id="ctrl" class="hide">
+      <button class="btn" id="mute">🎙️ Silenciar</button>
+      <button class="btn red" id="colgar">Colgar</button>
+    </div>`;
+  let peer, stream, call;
+  const fin = (t) => {
+    try { call && call.close(); } catch {}
+    try { peer && peer.destroy(); } catch {}
+    try { stream && stream.getTracks().forEach(x => x.stop()); } catch {}
+    $("ast").textContent = t || "Llamada terminada.";
+    $("ctrl").classList.add("hide"); $("ellos").classList.add("hide");
+  };
+  $("abtn").onclick = async () => {
+    $("abtn").classList.add("hide");
+    $("ast").textContent = "Conectando…";
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch { return fin("Necesitás dar permiso de micrófono para hablar."); }
+    if (typeof Peer === "undefined") return fin("No se pudo cargar la videollamada.");
+    peer = new Peer();
+    peer.on("open", () => {
+      const conn = peer.connect(id);
+      conn.on("close", () => fin("El visitante cortó."));
+    });
+    peer.on("call", (c) => {
+      call = c; call.answer(stream);
+      call.on("stream", (remoto) => {
+        const v = $("ellos"); v.srcObject = remoto; v.classList.remove("hide"); v.play().catch(() => {});
+        $("ast").textContent = remoto.getVideoTracks().length
+          ? "Conectado. El visitante te escucha, pero no te ve."
+          : "Conectado solo con audio.";
+        $("ctrl").classList.remove("hide");
+      });
+      call.on("close", () => fin("El visitante cortó."));
+    });
+    peer.on("error", (e) => fin(e && e.type === "peer-unavailable"
+      ? "El visitante ya cortó o se fue." : "No se pudo conectar. Probá de nuevo."));
+  };
+  $("colgar").onclick = () => fin("Colgaste la llamada.");
+  $("mute").onclick = () => {
+    const t = stream.getAudioTracks()[0]; t.enabled = !t.enabled;
+    $("mute").textContent = t.enabled ? "🎙️ Silenciar" : "🔇 Activar micrófono";
+  };
+}
+
+// =====================================================================
+//  ADMINISTRACIÓN: armar la lista de departamentos y el QR
+// =====================================================================
+async function admin() {
+  const KEY = "portero_admin_" + ARCHIVO;
+  let ed = null;
+  try { ed = JSON.parse(localStorage.getItem(KEY)); } catch {}
+  if (!ed) {
+    try { const r = await fetch(ARCHIVO + "?v=" + Date.now(), { cache: "no-store" }); if (r.ok) ed = await r.json(); } catch {}
+  }
+  if (!ed) ed = { nombre: "", direccion: "", unidades: [] };
+  ed.unidades = ed.unidades || [];
+
+  const guardar = () => { try { localStorage.setItem(KEY, JSON.stringify(ed)); } catch {} };
+  const nuevoTopic = () => "portero-" + crypto.getRandomValues(new Uint32Array(3)).join("").slice(0, 18);
+
+  const render = () => {
+    const urlQR = ARCHIVO === "edificio.json" ? BASE : `${BASE}?e=${encodeURIComponent(ARCHIVO)}`;
+    const qr = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=20&data=${encodeURIComponent(urlQR)}`;
+    app.innerHTML = `
+      <h1>Configurar portero</h1>
+      <p>Cargá los departamentos, descargá <code>${esc(ARCHIVO)}</code> y subilo al repo junto a esta página.</p>
+
+      <div class="box">
+        <h2>Edificio</h2>
+        <input id="edNom" placeholder="Nombre (ej: Edificio Libertad)" value="${esc(ed.nombre)}">
+        <input id="edDir" placeholder="Dirección (opcional)" value="${esc(ed.direccion || "")}">
+      </div>
+
+      <div class="box">
+        <h2>Departamentos (${ed.unidades.length})</h2>
+        <small>El nombre es opcional y se muestra a los visitantes. Cada departamento tiene su canal secreto de ntfy.</small>
+        <div id="filas">
+          ${ed.unidades.map((u, i) => `
+            <div class="row">
+              <input data-i="${i}" data-k="unidad" placeholder="1° A" value="${esc(u.unidad)}">
+              <input data-i="${i}" data-k="nombre" placeholder="Nombre (opcional)" value="${esc(u.nombre || "")}">
+              <button class="btn sm red" data-del="${i}">✕</button>
+              <div style="grid-column:1/-1"><small>Canal: <code>${esc(u.topic)}</code></small>
+                <button class="btn sm ghost" data-share="${i}">Enviar al vecino</button></div>
+            </div>`).join("")}
+        </div>
+        <div style="margin-top:12px">
+          <button class="btn" id="add">+ Agregar</button>
+          <button class="btn ghost" id="bulk">+ Agregar varios</button>
+        </div>
+      </div>
+
+      <div class="box" style="text-align:center">
+        <h2>Guardar</h2>
+        <button class="btn blue" id="dl">⬇️ Descargar ${esc(ARCHIVO)}</button>
+        <p style="margin:10px 0 0"><small>Cada vez que cambies la lista, volvé a subir este archivo al repo. El QR no cambia.</small></p>
+      </div>
+
+      <div class="box" style="text-align:center">
+        <h2>QR del edificio</h2>
+        <img id="qr" src="${qr}" alt="QR del portero">
+        <code>${esc(urlQR)}</code><br>
+        <a class="btn" href="${qr}" download="portero-qr.png" target="_blank">Descargar QR</a>
+        <a class="btn ghost" href="${urlQR}" target="_blank">Probar</a>
+      </div>`;
+
+    $("edNom").oninput = e => { ed.nombre = e.target.value; guardar(); };
+    $("edDir").oninput = e => { ed.direccion = e.target.value; guardar(); };
+    app.querySelectorAll("[data-k]").forEach(inp => inp.oninput = () => { ed.unidades[+inp.dataset.i][inp.dataset.k] = inp.value; guardar(); });
+    app.querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
+      const u = ed.unidades[+b.dataset.del];
+      if (confirm(`¿Borrar ${u.unidad || "este departamento"}?`)) { ed.unidades.splice(+b.dataset.del, 1); guardar(); render(); }
+    });
+    app.querySelectorAll("[data-share]").forEach(b => b.onclick = () => compartir(ed.unidades[+b.dataset.share]));
+    $("add").onclick = () => { ed.unidades.push({ unidad: "", nombre: "", topic: nuevoTopic() }); guardar(); render(); };
+    $("bulk").onclick = () => {
+      const pisos = parseInt(prompt("¿Cuántos pisos?", "5"), 10);
+      const letras = (prompt("Letras por piso (separadas por coma)", "A,B,C,D") || "").split(",").map(s => s.trim()).filter(Boolean);
+      if (!pisos || !letras.length) return;
+      if (confirm("¿Agregar también Portería / Encargado?")) ed.unidades.push({ unidad: "Portería", nombre: "", topic: nuevoTopic() });
+      for (let p = 1; p <= pisos; p++) for (const l of letras) ed.unidades.push({ unidad: `${p}° ${l}`, nombre: "", topic: nuevoTopic() });
+      guardar(); render();
+    };
+    $("dl").onclick = () => {
+      const limpio = { nombre: ed.nombre, direccion: ed.direccion,
+        unidades: ed.unidades.filter(u => u.unidad.trim()).map(u => ({ unidad: u.unidad.trim(), nombre: (u.nombre || "").trim(), topic: u.topic })) };
+      const blob = new Blob([JSON.stringify(limpio, null, 2)], { type: "application/json" });
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = ARCHIVO; a.click();
+    };
+  };
+
+  const compartir = async (u) => {
+    const texto = `Hola! Para recibir el timbre de ${u.unidad} (${ed.nombre || "el edificio"}) con videollamada en tu celular:\n\n` +
+      `1) Instalá la app "ntfy" (gratis, Android y iPhone).\n2) Tocá "+" y suscribite a este canal:\n${u.topic}\n\n` +
+      `No compartas este código: es la llave de tu timbre.`;
+    try { if (navigator.share) return await navigator.share({ text: texto }); } catch { return; }
+    try { await navigator.clipboard.writeText(texto); alert("Mensaje copiado. Pegalo en WhatsApp para el vecino."); }
+    catch { prompt("Copiá este mensaje:", texto); }
+  };
+
+  render();
+}
+
+function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+</script>
+</body>
+</html>
