@@ -1,5 +1,76 @@
 {
   "nombre": "Res. Casacoima",
   "direccion": "Av. Los Apamates - Las Palmas - Caracas, Venezuela",
-  "unidades": []
+  "unidades": [
+    {
+      "unidad": "Conserjeria",
+      "nombre": "",
+      "topic": "portero-430425054158042997"
+    },
+    {
+      "unidad": "1° 1",
+      "nombre": "",
+      "topic": "portero-284943561251549204"
+    },
+    {
+      "unidad": "1° 2",
+      "nombre": "",
+      "topic": "portero-115691840211691004"
+    },
+    {
+      "unidad": "2° 1",
+      "nombre": "",
+      "topic": "portero-320522862840224043"
+    },
+    {
+      "unidad": "2° 2",
+      "nombre": "",
+      "topic": "portero-239693864531595760"
+    },
+    {
+      "unidad": "3° 1",
+      "nombre": "",
+      "topic": "portero-297128379316782133"
+    },
+    {
+      "unidad": "3° 2",
+      "nombre": "",
+      "topic": "portero-175784138218785101"
+    },
+    {
+      "unidad": "4° 1",
+      "nombre": "",
+      "topic": "portero-333242229014663071"
+    },
+    {
+      "unidad": "4° 2",
+      "nombre": "",
+      "topic": "portero-243555208539254448"
+    },
+    {
+      "unidad": "5° 1",
+      "nombre": "",
+      "topic": "portero-333364986127510047"
+    },
+    {
+      "unidad": "5° 2",
+      "nombre": "",
+      "topic": "portero-394645960440711314"
+    },
+    {
+      "unidad": "6° 1",
+      "nombre": "",
+      "topic": "portero-402105598414517764"
+    },
+    {
+      "unidad": "6° 2",
+      "nombre": "",
+      "topic": "portero-300156116212460486"
+    },
+    {
+      "unidad": "PH",
+      "nombre": "",
+      "topic": "portero-654986357171878066"
+    }
+  ]
 }
