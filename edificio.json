@@ -4,28 +4,38 @@
   "unidades": [
     {
       "unidad": "3-A",
-      "nombre": "",
+      "nombre": "Flia Mezan",
       "topic": "portero-325335840225148033"
     },
     {
       "unidad": "1° A",
-      "nombre": "",
+      "nombre": "Meta",
       "topic": "portero-902336334318387808"
     },
     {
       "unidad": "1° B",
-      "nombre": "",
+      "nombre": "Mabzab",
       "topic": "portero-362166346040927373"
     },
     {
       "unidad": "2° A",
-      "nombre": "",
+      "nombre": "Rajeli",
       "topic": "portero-155167998330361377"
     },
     {
       "unidad": "2° B",
-      "nombre": "",
+      "nombre": "Melamed",
       "topic": "portero-230251781292143011"
+    },
+    {
+      "unidad": "2-C",
+      "nombre": "Flia. Chehebar",
+      "topic": "portero-118934398420113816"
+    },
+    {
+      "unidad": "4-A",
+      "nombre": "Flia. Mizrahi",
+      "topic": "portero-288231724630797456"
     }
   ]
 }
