@@ -162,6 +162,20 @@
   .row input { margin:0; padding:9px 10px; }
   .savebar { position:sticky; bottom:10px; text-align:center; z-index:4; }
   .hide { display:none !important; }
+  /* ---------- Modo kiosco (tablet en la entrada) ---------- */
+  html.kiosco { font-size:20px; }
+  html.kiosco body { align-items:center; user-select:none; -webkit-user-select:none; overscroll-behavior:none; touch-action:manipulation; padding:28px 28px 40px; }
+  html.kiosco input, html.kiosco textarea { user-select:text; -webkit-user-select:text; }
+  html.kiosco .wrap { max-width:720px; }
+  html.kiosco .plate { padding:34px 34px 30px; border-radius:38px; }
+  html.kiosco .bell { --s:min(320px, 46vw, 40vh); }
+  html.kiosco .unit { padding:18px 18px 18px 22px; grid-template-columns: 8rem 1fr auto; }
+  html.kiosco .unit b { font-size:1.6rem; }
+  html.kiosco .unit span { font-size:1.05rem; }
+  html.kiosco .unit i { width:46px; height:46px; }
+  html.kiosco .back { font-size:1.1rem; padding:10px 4px; }
+  html.kiosco .screen video { max-height:46vh; }
+
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation:none !important; transition:none !important; }
@@ -181,6 +195,7 @@ const ESPERA_VIDEO_SEG = 120;
 
 const params = new URLSearchParams(location.search);
 const _e = params.get("e") || "";
+const KIOSCO = params.has("kiosco");
 const ARCHIVO = /^[a-z0-9._-]+\.json$/i.test(_e) && _e !== "edificios.json" ? _e : "edificio.json";   // cada edificio es un archivo .json del repo
 const app = document.getElementById("app");
 const $ = id => document.getElementById(id);
@@ -196,13 +211,20 @@ async function portero() {
   let ed;
   try {
     const r = await fetch(ARCHIVO + "?v=" + Date.now(), { cache: "no-store" });
-    if (!r.ok) throw 0;
+    if (!r.ok) throw r.status;
     ed = await r.json();
-  } catch {
+  } catch (err) {
+    if (KIOSCO && err !== 404) {   // sin internet: reintenta solo
+      app.innerHTML = `<section class="plate"><div class="plate-top"><span class="led" aria-hidden="true"></span><span class="grille" aria-hidden="true"></span></div>
+        <div class="nameplate"><strong>Sin conexión</strong></div>
+        <p style="margin-top:12px">El portero se está reconectando. Probá de nuevo en un momento.</p></section>`;
+      setTimeout(portero, 30000);
+      return;
+    }
     app.innerHTML = `<section class="plate"><div class="plate-top"><span class="led" aria-hidden="true"></span><span class="grille" aria-hidden="true"></span></div>
       <div class="nameplate"><strong>Portero sin configurar</strong></div>
       <p style="margin-top:12px">Todavía no hay departamentos cargados.</p>
-      <a class="btn" href="${BASE}?admin">Configurar portero</a></section>`;
+      ${KIOSCO ? "" : `<a class="btn" href="${BASE}?admin">Configurar portero</a>`}</section>`;
     return;
   }
   document.title = ed.nombre || "Portero";
@@ -257,7 +279,12 @@ function timbreUnidad(ed, u) {
     </section>`;
   let enCurso = false;
   $("volver").onclick = () => { if (!enCurso || confirmar()) portero(); };
-  $("bell").onclick = () => { enCurso = true; tocarTimbre(ed, u, () => enCurso = false); };
+  $("bell").onclick = () => {
+    enCurso = true; Kiosco.cancelar();
+    tocarTimbre(ed, u, () => { enCurso = false; Kiosco.volverEn(15, () => !enCurso); });
+  };
+  // En la tablet: si nadie toca nada, vuelve a la lista
+  Kiosco.volverEn(60, () => !enCurso);
 }
 function confirmar() { $("cortar") && $("cortar").click(); return true; }
 
@@ -427,6 +454,7 @@ function atender() {
 const LS = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch {} };
 const REGISTRO = "edificios.json";
 const urlVisitante = (archivo) => archivo === "edificio.json" ? BASE : `${BASE}?e=${encodeURIComponent(archivo)}`;
+const urlKiosco = (archivo) => archivo === "edificio.json" ? `${BASE}?kiosco=1` : `${BASE}?e=${encodeURIComponent(archivo)}&kiosco=1`;
 const urlAdmin = (archivo) => archivo ? `${BASE}?admin&e=${encodeURIComponent(archivo)}` : `${BASE}?admin`;
 const qrDe = (url) => `https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=20&data=${encodeURIComponent(url)}`;
 
@@ -673,6 +701,14 @@ async function adminEdificio(archivo) {
         <p style="margin:10px 0 0"><small>Cada edificio tiene su propio QR. No cambia aunque modifiques los departamentos.</small></p>
       </section>
 
+      <section class="box">
+        <h2>Tablet en la entrada</h2>
+        <small>Abrí este link en la tablet del hall para usarla como portero fijo: pantalla completa, sin QR, y vuelve sola a la lista después de cada llamada.</small>
+        <p style="margin:8px 0"><code id="kioscoUrl">${esc(urlKiosco(archivo))}</code></p>
+        <button class="btn sm" id="copiarKiosco">Copiar link</button>
+        <a class="btn sm ghost" href="${urlKiosco(archivo)}" target="_blank" rel="noopener">Probar</a>
+      </section>
+
       ${cajaGitHub(msgOnline)}
 
       <section class="box">
@@ -700,12 +736,66 @@ async function adminEdificio(archivo) {
     };
     $("save").onclick = guardarOnline;
     $("borrarEd").onclick = eliminar;
+    $("copiarKiosco").onclick = async () => {
+      try { await navigator.clipboard.writeText(urlKiosco(archivo)); $("copiarKiosco").textContent = "✔ Copiado"; }
+      catch { prompt("Copiá este link:", urlKiosco(archivo)); }
+    };
     bindGitHub(m => { msgOnline = m; render(); });
   };
   render();
 }
 
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+
+// =====================================================================
+//  MODO KIOSCO (tablet fija en la entrada): edificio.html?kiosco=1
+// =====================================================================
+const Kiosco = (() => {
+  const on = KIOSCO;
+  let timer = null, rearmar = null, ultimo = Date.now(), wake = null;
+  const arrancado = Date.now();
+
+  function cancelar() { clearTimeout(timer); timer = null; rearmar = null; }
+  // Vuelve a la lista de departamentos después de "seg" segundos sin uso
+  function volverEn(seg, puede) {
+    if (!on) return;
+    clearTimeout(timer);
+    rearmar = () => { clearTimeout(timer); timer = setTimeout(() => { if (!puede || puede()) { rearmar = null; portero(); } }, seg * 1000); };
+    rearmar();
+  }
+
+  if (on) {
+    document.documentElement.classList.add("kiosco");
+    const vp = document.querySelector('meta[name="viewport"]');
+    if (vp) vp.content = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no";
+    document.addEventListener("contextmenu", e => e.preventDefault());
+
+    // Mantener la pantalla encendida
+    const pedirWake = async () => { try { if ("wakeLock" in navigator && !wake) { wake = await navigator.wakeLock.request("screen"); wake.addEventListener("release", () => wake = null); } } catch {} };
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") pedirWake(); });
+    pedirWake();
+
+    // Cualquier toque: cuenta como actividad, reinicia la espera y pide pantalla completa
+    const actividad = () => {
+      ultimo = Date.now();
+      if (rearmar) rearmar();
+      pedirWake();
+      const d = document.documentElement;
+      if (!document.fullscreenElement && d.requestFullscreen) d.requestFullscreen().catch(() => {});
+    };
+    ["pointerdown", "keydown", "input"].forEach(ev => document.addEventListener(ev, actividad, { passive: true }));
+
+    // Mantenimiento: refresca la lista cada 10 min sin uso y recarga la página cada 12 h
+    setInterval(() => {
+      const enLista = !!$("grid"), quieto = Date.now() - ultimo;
+      if (!enLista || quieto < 120000) return;
+      if (Date.now() - arrancado > 12 * 3600e3) location.reload();
+      else if (quieto > 600000) { ultimo = Date.now(); portero(); }
+    }, 60000);
+  }
+  return { on, cancelar, volverEn };
+})();
+
 
 // ---- Arranque (al final, cuando todo está definido) ----
 if (params.has("admin")) (params.get("e") ? adminEdificio(ARCHIVO) : adminLista());
