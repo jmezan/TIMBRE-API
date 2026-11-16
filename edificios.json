@@ -1,0 +1,12 @@
+[
+  {
+    "archivo": "edificio.json",
+    "nombre": "LAVALLE 2880",
+    "unidades": 7
+  },
+  {
+    "archivo": "edificio-res-casacoima.json",
+    "nombre": "Res. Casacoima",
+    "unidades": 0
+  }
+]
