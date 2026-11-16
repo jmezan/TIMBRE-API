@@ -162,6 +162,16 @@
   .row input { margin:0; padding:9px 10px; }
   .savebar { position:sticky; bottom:10px; text-align:center; z-index:4; }
   .hide { display:none !important; }
+  /* ---------- Abrir puerta ---------- */
+  .door { margin-top:18px; padding-top:16px; border-top:1px solid rgba(0,0,0,.1); }
+  .btn.door-btn { font:700 1.2rem var(--cond); letter-spacing:.03em; padding:14px 30px;
+                  background: linear-gradient(180deg, #e2b75a, #a87a26); color:#1d2a2f; }
+  .door #pinBox { max-width:260px; margin:12px auto 0; }
+  .door #pin { text-align:center; font-size:1.3rem; letter-spacing:.3em; }
+  .check { display:flex; align-items:center; justify-content:center; gap:8px; font-size:.9rem; color:var(--muted); }
+  .check input { width:auto; margin:0; }
+  .pinTag { font-size:.8rem; color:var(--ok); font-weight:600; margin-left:6px; }
+
   /* ---------- Modo kiosco (tablet en la entrada) ---------- */
   html.kiosco { font-size:20px; }
   html.kiosco body { align-items:center; user-select:none; -webkit-user-select:none; overscroll-behavior:none; touch-action:manipulation; padding:28px 28px 40px; }
@@ -190,6 +200,19 @@
 <script>
 // ==== CONFIGURACIÓN ====
 const NTFY = "https://ntfy.sh";
+// Apertura de puerta: Edge Function "puerta" en Supabase (la clave es la pública "publishable")
+const SUPA_URL = "https://vrgkfaueuszwmocdnylw.supabase.co";
+const SUPA_KEY = "sb_publishable_F134Y7czJn-F5r1BWR3oRQ_arEXKV2M";
+async function puertaApi(body) {
+  let r;
+  try {
+    r = await fetch(`${SUPA_URL}/functions/v1/puerta`, { method: "POST",
+      headers: { "Content-Type": "application/json", apikey: SUPA_KEY }, body: JSON.stringify(body) });
+  } catch { throw new Error("Sin conexión. Probá de nuevo."); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error || "Error " + r.status); e.status = r.status; throw e; }
+  return j;
+}
 const COOLDOWN_SEG = 30;
 const ESPERA_VIDEO_SEG = 120;
 
@@ -342,7 +365,7 @@ async function tocarTimbre(ed, u, alTerminar) {
   peer = new Peer("portero-" + crypto.getRandomValues(new Uint32Array(3)).join(""));
 
   peer.on("open", async (id) => {
-    const link = `${BASE}?atender=${encodeURIComponent(id)}&n=${encodeURIComponent(u.unidad + " · " + (ed.nombre || ""))}`;
+    const link = `${BASE}?atender=${encodeURIComponent(id)}&n=${encodeURIComponent(u.unidad + " · " + (ed.nombre || ""))}&e=${encodeURIComponent(ARCHIVO)}&u=${encodeURIComponent(u.unidad)}`;
     try { await avisar(link); avisado = true; }
     catch { return terminar("No se pudo avisar. Revisá tu conexión e intentá de nuevo.", "err"); }
     estado(`🔔 Llamando a ${u.unidad}… esperá que te atiendan.`, "ok");
@@ -389,6 +412,30 @@ function cuentaRegresiva(bell) {
 // =====================================================================
 //  VECINO: atiende desde la notificación
 // =====================================================================
+// ---------- Abrir puerta desde "Atender" ----------
+function puertaAtender(edificio, unidad) {
+  const KEY = `pin:${edificio}:${unidad}`;
+  const guardado = () => { try { return localStorage.getItem(KEY) || ""; } catch { return ""; } };
+  const est = (t, c) => { $("dst").className = "status " + (c || ""); $("dst").textContent = t; };
+  if (!guardado()) $("pinBox").classList.remove("hide");
+  $("abrir").onclick = async () => {
+    const pin = guardado() || $("pin").value.trim();
+    if (!/^\d{4,8}$/.test(pin)) { $("pinBox").classList.remove("hide"); $("pin").focus(); return est("Escribí tu PIN (de 4 a 8 números).", "err"); }
+    $("abrir").disabled = true; est("Abriendo…");
+    try {
+      await puertaApi({ accion: "abrir", edificio, unidad, pin });
+      if ($("recordar").checked) { try { localStorage.setItem(KEY, pin); } catch {} }
+      $("pinBox").classList.add("hide"); $("pin").value = "";
+      est("🔓 Puerta abierta", "ok");
+      setTimeout(() => { $("abrir").disabled = false; }, 4000);
+    } catch (e) {
+      $("abrir").disabled = false;
+      if (e.status === 401) { try { localStorage.removeItem(KEY); } catch {} $("pinBox").classList.remove("hide"); $("pin").value = ""; }
+      est(e.message, "err");
+    }
+  };
+}
+
 function atender() {
   const id = params.get("atender"), n = params.get("n") || "Portero";
   app.innerHTML = `
@@ -402,6 +449,15 @@ function atender() {
         <button class="btn" id="mute">🎙️ Silenciar</button>
         <button class="btn red" id="colgar">Colgar</button>
       </div>
+      ${params.get("u") ? `
+      <div class="door">
+        <button class="btn door-btn" id="abrir">🔓 Abrir puerta</button>
+        <div id="pinBox" class="hide">
+          <input id="pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="Tu PIN de apertura" autocomplete="off">
+          <label class="check"><input type="checkbox" id="recordar" checked> Recordar en este celular</label>
+        </div>
+        <div class="status" id="dst" role="status" aria-live="polite"></div>
+      </div>` : ""}
     </section>`;
   let peer, stream, call;
   const fin = (t) => {
@@ -437,6 +493,7 @@ function atender() {
       ? "El visitante ya cortó o se fue." : "No se pudo conectar. Probá de nuevo."));
   };
   $("colgar").onclick = () => fin("Colgaste la llamada.");
+  if ($("abrir")) puertaAtender(params.get("e") || "edificio.json", params.get("u"));
   $("mute").onclick = () => {
     const t = stream.getAudioTracks()[0]; t.enabled = !t.enabled;
     $("mute").textContent = t.enabled ? "🎙️ Silenciar" : "🔇 Activar micrófono";
@@ -603,6 +660,15 @@ async function adminEdificio(archivo) {
   if (!ed) ed = { nombre: "", direccion: "", unidades: [] };
   ed.unidades = ed.unidades || [];
 
+  // ---- Apertura de puerta ----
+  let puerta = { clave: LS("puerta_admin") || "", estado: null, msg: "" };
+  const cargarPuerta = async () => {
+    if (!puerta.clave) return;
+    try { puerta.estado = await puertaApi({ accion: "admin_estado", admin: puerta.clave, edificio: archivo }); puerta.msg = ""; }
+    catch (e) { puerta.estado = null; puerta.msg = "⚠️ " + e.message; }
+  };
+  await cargarPuerta();
+
   const limpio = () => ({ nombre: (ed.nombre || "").trim(), direccion: (ed.direccion || "").trim(),
     unidades: ed.unidades.filter(u => (u.unidad || "").trim()).map(u => ({ unidad: u.unidad.trim(), nombre: (u.nombre || "").trim(), topic: u.topic })) });
 
@@ -678,7 +744,8 @@ async function adminEdificio(archivo) {
               <input data-i="${i}" data-k="nombre" placeholder="Nombre (opcional)" value="${esc(u.nombre || "")}">
               <button class="btn sm red" data-del="${i}" aria-label="Borrar ${esc(u.unidad || "departamento")}">✕</button>
               <div style="grid-column:1/-1"><small>Canal: <code>${esc(u.topic)}</code></small>
-                <button class="btn sm ghost" data-share="${i}">Enviar al vecino</button></div>
+                <button class="btn sm ghost" data-share="${i}">Enviar al vecino</button>
+                ${puerta.estado ? `<button class="btn sm ghost" data-pin="${i}">🔑 PIN puerta</button>${puerta.estado.conPin.includes((u.unidad || "").trim()) ? `<span class="pinTag">PIN ✓</span>` : ""}` : ""}</div>
             </div>`).join("")}
         </div>
         <div style="margin-top:12px">
@@ -699,6 +766,28 @@ async function adminEdificio(archivo) {
         <a class="btn" href="${qr}" download="portero-qr.png" target="_blank" rel="noopener">Descargar QR</a>
         <a class="btn ghost" href="${urlQR}" target="_blank" rel="noopener">Probar</a>
         <p style="margin:10px 0 0"><small>Cada edificio tiene su propio QR. No cambia aunque modifiques los departamentos.</small></p>
+      </section>
+
+      <section class="box">
+        <h2>Apertura de puerta</h2>
+        <small>Los vecinos abren desde la pantalla "Atender" con su PIN. La orden pasa por tu función de Supabase, que maneja el relé Tuya.</small>
+        ${puerta.msg ? `<div class="status err">${esc(puerta.msg)}</div>` : ""}
+        ${!puerta.estado ? `
+          <input id="pClave" type="password" placeholder="Clave de administrador de la puerta" autocomplete="off" style="margin-top:10px" value="${esc(puerta.clave)}">
+          <button class="btn sm" id="pEntrar">Conectar</button>` : `
+          <input id="pDev" placeholder="Device ID del relé (Tuya)" value="${esc(puerta.estado.equipo?.device_id || "")}" style="margin-top:10px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <input id="pCod" placeholder="Canal (switch_1)" value="${esc(puerta.estado.equipo?.codigo || "switch_1")}">
+            <input id="pSeg" type="number" min="0" max="10" step="0.5" placeholder="Segundos" value="${(puerta.estado.equipo?.pulso_ms ?? 1000) / 1000}">
+          </div>
+          <small>Segundos que el relé queda activado (0 si ya configuraste el pulso en la app Tuya).</small><br>
+          <button class="btn sm" id="pGuardar">Guardar equipo</button>
+          <button class="btn sm ghost" id="pProbar" ${puerta.estado.equipo ? "" : "disabled"}>Probar apertura</button>
+          <div class="status" id="pSt"></div>
+          <p style="margin:10px 0 4px"><small>PINs cargados: ${puerta.estado.conPin.length} de ${ed.unidades.length} departamentos. Se cargan con el botón "🔑 PIN puerta" de cada uno.</small></p>
+          ${puerta.estado.registro.length ? `<details><summary><small>Últimas aperturas e intentos</small></summary>
+            <small>${puerta.estado.registro.map(r => `${new Date(r.created_at).toLocaleString("es-AR", { dateStyle: "short", timeStyle: "short" })} · ${esc(r.unidad || "—")} · ${r.ok ? "✅" : "❌"} ${esc(r.motivo || "")}`).join("<br>")}</small></details>` : ""}
+          <button class="btn sm ghost" id="pSalir">Olvidar clave en este dispositivo</button>`}
       </section>
 
       <section class="box">
@@ -736,6 +825,42 @@ async function adminEdificio(archivo) {
     };
     $("save").onclick = guardarOnline;
     $("borrarEd").onclick = eliminar;
+    // ---- eventos de la puerta ----
+    if ($("pEntrar")) $("pEntrar").onclick = async () => {
+      puerta.clave = $("pClave").value.trim(); if (!puerta.clave) return;
+      $("pEntrar").disabled = true; await cargarPuerta();
+      if (puerta.estado) LS("puerta_admin", puerta.clave);
+      render();
+    };
+    if ($("pSalir")) $("pSalir").onclick = () => { LS("puerta_admin", null); puerta = { clave: "", estado: null, msg: "" }; render(); };
+    const pEst = (t, c) => { $("pSt").className = "status " + (c || ""); $("pSt").textContent = t; };
+    if ($("pGuardar")) $("pGuardar").onclick = async () => {
+      pEst("Guardando…");
+      try {
+        await puertaApi({ accion: "admin_equipo", admin: puerta.clave, edificio: archivo,
+          device_id: $("pDev").value.trim(), codigo: $("pCod").value.trim() || "switch_1", pulso_ms: Math.round(Number($("pSeg").value || 0) * 1000) });
+        await cargarPuerta(); render(); setTimeout(() => $("pSt") && pEst("✅ Equipo guardado.", "ok"), 0);
+      } catch (e) { pEst(e.message, "err"); }
+    };
+    if ($("pProbar")) $("pProbar").onclick = async () => {
+      if (!confirm("¿Abrir la puerta ahora para probar?")) return;
+      pEst("Abriendo…");
+      try { await puertaApi({ accion: "admin_probar", admin: puerta.clave, edificio: archivo }); pEst("🔓 Puerta abierta.", "ok"); }
+      catch (e) { pEst(e.message, "err"); }
+    };
+    app.querySelectorAll("[data-pin]").forEach(b => b.onclick = async () => {
+      const u = ed.unidades[+b.dataset.pin], unidad = (u.unidad || "").trim();
+      if (!unidad) return alert("Primero poné el nombre del departamento.");
+      if (sucio) return alert("Guardá los cambios de la lista antes de cargar PINs.");
+      const pin = prompt(`PIN de apertura para ${unidad} (4 a 8 números).\nDejalo vacío para quitarle el PIN.`);
+      if (pin === null) return;
+      if (pin && !/^\d{4,8}$/.test(pin.trim())) return alert("El PIN tiene que tener de 4 a 8 números.");
+      try {
+        await puertaApi({ accion: "admin_pin", admin: puerta.clave, edificio: archivo, unidad, pin: pin.trim() });
+        await cargarPuerta(); render();
+        alert(pin ? `PIN guardado para ${unidad}. Pasáselo al vecino por un canal privado.` : `Se quitó el PIN de ${unidad}.`);
+      } catch (e) { alert("No se pudo guardar: " + e.message); }
+    });
     $("copiarKiosco").onclick = async () => {
       try { await navigator.clipboard.writeText(urlKiosco(archivo)); $("copiarKiosco").textContent = "✔ Copiado"; }
       catch { prompt("Copiá este link:", urlKiosco(archivo)); }
