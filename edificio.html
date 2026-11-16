@@ -162,12 +162,31 @@
   .row input { margin:0; padding:9px 10px; }
   .savebar { position:sticky; bottom:10px; text-align:center; z-index:4; }
   .hide { display:none !important; }
+  /* ---------- Cara + PIN (tablet) ---------- */
+  .espejo { transform: scaleX(-1); }
+  .facebar { display:grid; grid-template-columns:72px 1fr; gap:8px 14px; align-items:center; text-align:left; margin-top:16px; padding-top:14px; border-top:1px solid rgba(0,0,0,.1); }
+  .facebar video { width:72px; height:72px; border-radius:50%; object-fit:cover; background:#0f1719; box-shadow:0 0 0 3px var(--brass), 0 0 0 4px var(--brass2); }
+  .facebar b { display:block; font:700 1.15rem/1.1 var(--cond); }
+  .facebar span { font-size:.95rem; color:var(--muted); }
+  .facebar .btn { grid-column:1/-1; justify-self:start; margin:0; }
+  .overlay { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; padding:20px; background:rgba(8,22,27,.86); }
+  .overlay .plate { width:100%; max-width:460px; }
+  .pinDots { min-height:2.2rem; margin:14px 0 10px; font:700 1.6rem/1 var(--cond); letter-spacing:.35em; color:var(--engrave); }
+  .pinDots.vacio { font:500 1rem var(--font); letter-spacing:0; color:var(--muted); }
+  .keypad { display:grid; grid-template-columns:repeat(3, 1fr); gap:12px; max-width:300px; margin:0 auto; }
+  .key { aspect-ratio:1.25; border:none; border-radius:16px; font:700 1.6rem var(--cond); color:#f6e3b4; cursor:pointer;
+         background: radial-gradient(circle at 50% 30%, #3a4b51, var(--glass) 75%); box-shadow: 0 0 0 2px var(--brass2), 0 4px 8px -3px rgba(0,0,0,.5); }
+  .key:active { transform: scale(.95); }
+  .key.ok { background: linear-gradient(180deg, #2f9a62, #1d7046); color:#fff; font-size:1.2rem; box-shadow:none; }
+  .key:disabled { opacity:.5; }
+
   /* ---------- Abrir puerta ---------- */
   .door { margin-top:18px; padding-top:16px; border-top:1px solid rgba(0,0,0,.1); }
   .btn.door-btn { font:700 1.2rem var(--cond); letter-spacing:.03em; padding:14px 30px;
                   background: linear-gradient(180deg, #e2b75a, #a87a26); color:#1d2a2f; }
   .door #pinBox { max-width:260px; margin:12px auto 0; }
-  .door #pin { text-align:center; font-size:1.3rem; letter-spacing:.3em; }
+  .door #pin { text-align:center; font-size:1rem; }
+  .door #pin:not(:placeholder-shown) { font-size:1.3rem; letter-spacing:.3em; }
   .check { display:flex; align-items:center; justify-content:center; gap:8px; font-size:.9rem; color:var(--muted); }
   .check input { width:auto; margin:0; }
   .pinTag { font-size:.8rem; color:var(--ok); font-weight:600; margin-left:6px; }
@@ -219,6 +238,8 @@ const ESPERA_VIDEO_SEG = 120;
 const params = new URLSearchParams(location.search);
 const _e = params.get("e") || "";
 const KIOSCO = params.has("kiosco");
+const KTOKEN = params.get("k") || "";
+const CARAS = KIOSCO && KTOKEN.length >= 32;   // cara + PIN solo en la tablet autorizada
 const ARCHIVO = /^[a-z0-9._-]+\.json$/i.test(_e) && _e !== "edificios.json" ? _e : "edificio.json";   // cada edificio es un archivo .json del repo
 const app = document.getElementById("app");
 const $ = id => document.getElementById(id);
@@ -268,15 +289,28 @@ async function portero() {
       <p class="sub" style="margin:12px 0 0">Tocá el botón del departamento al que venís.</p>
       ${unidades.length > 8 ? `<input id="buscar" type="search" placeholder="Buscar por departamento o apellido" style="margin:14px 0 0">` : ""}
       <div class="directory" id="grid">${lista()}</div>
+      ${CARAS ? `
+      <div class="facebar">
+        <video id="fvid" autoplay playsinline muted class="espejo"></video>
+        <div><b>¿Vivís acá?</b><span id="fst">Acercate a la cámara para entrar con tu cara y tu PIN.</span></div>
+        <button type="button" class="btn sm ghost" id="regCara">Registrar mi cara</button>
+      </div>` : ""}
     </section>
-    <p class="foot">Se abre una videollamada con el departamento. Si no das permiso de cámara, el aviso llega igual.</p>`;
+    <p class="foot">${CARAS ? "Esta tablet usa reconocimiento facial solo para propietarios registrados. " : ""}Se abre una videollamada con el departamento. Si no das permiso de cámara, el aviso llega igual.</p>`;
 
-  const bind = () => app.querySelectorAll(".unit").forEach(b => b.onclick = () => timbreUnidad(ed, unidades[+b.dataset.i]));
+  const bind = () => app.querySelectorAll("#grid .unit").forEach(b => b.onclick = () => timbreUnidad(ed, unidades[+b.dataset.i]));
   bind();
+  if (CARAS) {
+    const TXT = { listo: "Acercate a la cámara para entrar con tu cara y tu PIN.", lejos: "Acercate un poco más a la tablet.",
+                  buscando: "Reconociendo…", desconocido: "No te reconocemos. Si vivís acá, registrá tu cara.", error: "Reconocimiento facial no disponible." };
+    Caras.vigilar($("fvid"), e => { if ($("fst")) $("fst").textContent = TXT[e] || ""; }, unidad => holaPropietario(ed, unidad));
+    $("regCara").onclick = () => registrarCara(ed);
+  }
   if ($("buscar")) $("buscar").oninput = e => { $("grid").innerHTML = lista(e.target.value); bind(); };
 }
 
 function timbreUnidad(ed, u) {
+  if (CARAS) Caras.parar();
   app.innerHTML = `
     <button class="back" id="volver" style="color:#d9e6e9">← Todos los departamentos</button>
     <section class="plate">
@@ -311,12 +345,14 @@ function timbreUnidad(ed, u) {
 }
 function confirmar() { $("cortar") && $("cortar").click(); return true; }
 
-async function tocarTimbre(ed, u, alTerminar) {
+async function tocarTimbre(ed, u, alTerminar, desde) {   // desde = departamento que llama (llamada interna)
   const bell = $("bell"), st = $("st");
   const estado = (t, c) => { st.className = "status " + (c || ""); st.textContent = t; };
   const nombre = $("nombre").value.trim(), msg = $("msg").value.trim();
   const telVis = $("telvis").value.replace(/[^\d+]/g, "");
-  let cuerpo = (nombre ? nombre : "Alguien") + " toca el timbre de " + u.unidad;
+  let cuerpo = desde
+    ? `${desde.unidad}${desde.nombre ? " (" + desde.nombre + ")" : ""} llama a ${u.unidad}`
+    : (nombre ? nombre : "Alguien") + " toca el timbre de " + u.unidad;
   if (msg) cuerpo += "\n💬 " + msg;
   if (telVis) cuerpo += "\n📞 " + telVis;
 
@@ -325,7 +361,7 @@ async function tocarTimbre(ed, u, alTerminar) {
     if (link) acc.push(`view, Atender video, ${link}`);
     if (telVis) acc.push(`view, Llamar, tel:${telVis}`, `view, WhatsApp, https://wa.me/${telVis.replace("+", "")}`);
     const q = new URLSearchParams({
-      title: `Timbre ${u.unidad} - ${ed.nombre || "Edificio"}`,
+      title: desde ? `Llamada interna de ${desde.unidad} - ${ed.nombre || "Edificio"}` : `Timbre ${u.unidad} - ${ed.nombre || "Edificio"}`,
       priority: link ? "urgent" : "high", tags: link ? "bell,video_camera" : "bell"
     });
     if (acc.length) q.set("actions", acc.slice(0, 3).join("; "));
@@ -412,6 +448,57 @@ function cuentaRegresiva(bell) {
 // =====================================================================
 //  VECINO: atiende desde la notificación
 // =====================================================================
+// =====================================================================
+//  VECINO: portero interno en su celular → llamar a portería
+//  edificio.html?vecino=1&e=<archivo>&u=<departamento>
+// =====================================================================
+const esPorteria = u => /porter|encargad|conserj|guardia|seguridad/i.test(u.unidad + " " + (u.nombre || ""));
+
+async function vecinoPantalla() {
+  const unidad = params.get("u") || "";
+  app.innerHTML = `<section class="plate">${PLACA_TOP}<p class="status">Cargando…</p></section>`;
+  let ed;
+  try { const r = await fetch(ARCHIVO + "?v=" + Date.now(), { cache: "no-store" }); if (!r.ok) throw 0; ed = await r.json(); }
+  catch { app.innerHTML = `<section class="plate">${PLACA_TOP}<div class="nameplate"><strong>Sin conexión</strong></div><p style="margin-top:12px">Revisá internet y volvé a abrir esta página.</p></section>`; return; }
+  const unidades = (ed.unidades || []).filter(x => x.topic);
+  const yo = unidades.find(x => x.unidad === unidad);
+  const port = unidades.find(esPorteria);
+  document.title = "Portero interno";
+
+  if (!yo) {
+    app.innerHTML = `<section class="plate">${PLACA_TOP}<div class="nameplate"><strong>Link no válido</strong></div>
+      <p style="margin-top:12px">Este departamento ya no figura en ${esc(ed.nombre || "el edificio")}. Pedile el link nuevo a la administración.</p></section>`;
+    return;
+  }
+  app.innerHTML = `
+    <section class="plate">
+      ${PLACA_TOP}
+      <div class="nameplate"><small>${esc(ed.nombre || "")}</small><strong>${esc(yo.unidad)}</strong></div>
+      ${yo.nombre ? `<p class="sub">${esc(yo.nombre)}</p>` : ""}
+      ${port ? `
+      <div id="vzone" class="screen hide">
+        <video id="yo" autoplay playsinline muted class="espejo"></video>
+        <audio id="ellos" autoplay playsinline></audio>
+        <div class="row-actions">
+          <button class="btn hide" id="oir">🔊 Activar sonido</button>
+          <button class="btn red" id="cortar">Cortar</button>
+        </div>
+      </div>
+      <button class="bell" id="bell" aria-label="Llamar a ${esc(port.unidad)}"><span class="bell-face">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1L6.6 10.8Z"/></svg>
+        <span id="bellTxt">Llamar a ${esc(port.unidad)}</span></span></button>
+      <div class="status" id="st" role="status" aria-live="polite"></div>
+      <details class="extra">
+        <summary>Agregar un mensaje</summary>
+        <input id="nombre" type="hidden" value="">
+        <input id="telvis" type="hidden" value="">
+        <textarea id="msg" placeholder="Ej: se cortó la luz del palier" maxlength="140"></textarea>
+      </details>` : `<p style="margin-top:14px">Este edificio todavía no tiene portería cargada en el portero.</p>`}
+    </section>
+    <p class="foot">Llamada por video a ${port ? esc(port.unidad) : "la portería"}. Guardá esta página en la pantalla de inicio para tenerla a mano.</p>`;
+  if (port) $("bell").onclick = () => tocarTimbre(ed, port, () => {}, yo);
+}
+
 // ---------- Abrir puerta desde "Atender" ----------
 function puertaAtender(edificio, unidad) {
   const KEY = `pin:${edificio}:${unidad}`;
@@ -457,22 +544,32 @@ function atender() {
           <label class="check"><input type="checkbox" id="recordar" checked> Recordar en este celular</label>
         </div>
         <div class="status" id="dst" role="status" aria-live="polite"></div>
+        <div id="portBox" class="hide" style="margin-top:14px">
+          <button class="btn" id="llamarPort">📞 Llamar a portería</button>
+          <div class="status" id="pst" role="status" aria-live="polite"></div>
+          <audio id="portAudio" autoplay playsinline></audio>
+        </div>
       </div>` : ""}
     </section>`;
-  let peer, stream, call;
+  if (/^Llamada de /.test(n)) $("ast").textContent = "Te están llamando.";
+  let peer, stream, call, visitaActiva = false, pActiva = false;
+  // El micrófono se comparte entre la visita y la llamada a portería: se apaga cuando no queda ninguna
+  const micLibre = () => { if (!visitaActiva && !pActiva) { try { stream && stream.getTracks().forEach(x => x.stop()); } catch {} stream = null; } };
   const fin = (t) => {
+    visitaActiva = false;
     try { call && call.close(); } catch {}
     try { peer && peer.destroy(); } catch {}
-    try { stream && stream.getTracks().forEach(x => x.stop()); } catch {}
+    micLibre();
     $("ast").textContent = t || "Llamada terminada.";
     $("ctrl").classList.add("hide"); $("ellos").classList.add("hide");
   };
   $("abtn").onclick = async () => {
     $("abtn").classList.add("hide");
     $("ast").textContent = "Conectando…";
-    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    try { if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
     catch { return fin("Necesitás dar permiso de micrófono para hablar."); }
     if (typeof Peer === "undefined") return fin("No se pudo cargar la videollamada.");
+    visitaActiva = true;
     peer = new Peer();
     peer.on("open", () => {
       const conn = peer.connect(id);
@@ -495,9 +592,64 @@ function atender() {
   $("colgar").onclick = () => fin("Colgaste la llamada.");
   if ($("abrir")) puertaAtender(params.get("e") || "edificio.json", params.get("u"));
   $("mute").onclick = () => {
+    if (!stream) return;
     const t = stream.getAudioTracks()[0]; t.enabled = !t.enabled;
     $("mute").textContent = t.enabled ? "🎙️ Silenciar" : "🔇 Activar micrófono";
   };
+
+  // ---- Llamar a portería sin salir de esta pantalla (solo audio, se puede en medio de la visita) ----
+  let pPeer = null, pTimeout = null, port = null;
+  const pEst = (t, c) => { $("pst").className = "status " + (c || ""); $("pst").textContent = t; };
+  const cortarPort = (t) => {
+    clearTimeout(pTimeout); pActiva = false;
+    try { pPeer && pPeer.destroy(); } catch {}
+    pPeer = null; $("portAudio").srcObject = null;
+    $("llamarPort").textContent = `📞 Llamar a ${port.unidad}`; $("llamarPort").classList.remove("red");
+    pEst(t || ""); micLibre();
+  };
+  const llamarPort = async (ed, yo) => {
+    if (typeof Peer === "undefined") return pEst("No se pudo cargar la llamada.", "err");
+    try { if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+    catch { return pEst("Necesitás dar permiso de micrófono.", "err"); }
+    pActiva = true;
+    $("llamarPort").textContent = `Cortar llamada a ${port.unidad}`; $("llamarPort").classList.add("red");
+    pEst(`Llamando a ${port.unidad}…`);
+    pPeer = new Peer("portero-" + crypto.getRandomValues(new Uint32Array(3)).join(""));
+    pPeer.on("open", async (pid) => {
+      const link = `${BASE}?atender=${encodeURIComponent(pid)}&n=${encodeURIComponent("Llamada de " + yo.unidad + " · " + (ed.nombre || ""))}&e=${encodeURIComponent(ARCHIVO)}&u=${encodeURIComponent(port.unidad)}`;
+      const q = new URLSearchParams({ title: `Llamada interna de ${yo.unidad} - ${ed.nombre || "Edificio"}`,
+        priority: "urgent", tags: "telephone_receiver", actions: `view, Atender, ${link}`, click: link });
+      const cuerpo = `${yo.unidad}${yo.nombre ? " (" + yo.nombre + ")" : ""} llama a ${port.unidad}` +
+        (visitaActiva ? "\n🚪 Está atendiendo a una visita en la puerta" : "");
+      try { const r = await fetch(`${NTFY}/${encodeURIComponent(port.topic)}?${q}`, { method: "POST", body: cuerpo }); if (!r.ok) throw 0; }
+      catch { return cortarPort(`No se pudo avisar a ${port.unidad}. Revisá tu conexión.`); }
+      pTimeout = setTimeout(() => cortarPort(`${port.unidad} no atendió.`), 120000);
+    });
+    pPeer.on("connection", (conn) => {
+      clearTimeout(pTimeout); pEst("Conectando…");
+      const iniciar = () => {
+        const c = pPeer.call(conn.peer, stream);
+        c.on("stream", (rem) => { const a = $("portAudio"); a.srcObject = rem; a.play().catch(() => {}); pEst(`🟢 Hablando con ${port.unidad}`, "ok"); });
+        c.on("close", () => cortarPort(`${port.unidad} cortó.`));
+      };
+      if (conn.open) iniciar(); else conn.on("open", iniciar);
+      conn.on("close", () => pActiva && cortarPort(`${port.unidad} cortó.`));
+    });
+    pPeer.on("error", () => cortarPort(`No se pudo conectar con ${port.unidad}.`));
+  };
+  (async () => {
+    const u = params.get("u");
+    if (!u || !$("portBox")) return;
+    let ed;
+    try { const r = await fetch(ARCHIVO + "?v=" + Date.now(), { cache: "no-store" }); if (!r.ok) return; ed = await r.json(); } catch { return; }
+    const unidades = (ed.unidades || []).filter(x => x.topic);
+    port = unidades.find(esPorteria);
+    if (!port || port.unidad === u) return;          // si el que atiende es la portería, no hace falta
+    const yo = unidades.find(x => x.unidad === u) || { unidad: u };
+    $("portBox").classList.remove("hide");
+    $("llamarPort").textContent = `📞 Llamar a ${port.unidad}`;
+    $("llamarPort").onclick = () => pActiva ? cortarPort(`Cortaste la llamada a ${port.unidad}.`) : llamarPort(ed, yo);
+  })();
 }
 
 // =====================================================================
@@ -714,9 +866,12 @@ async function adminEdificio(archivo) {
   window.onbeforeunload = () => sucio ? "Hay cambios sin guardar" : undefined;
 
   const compartir = async (u) => {
+    const linkVecino = `${BASE}?vecino=1&e=${encodeURIComponent(archivo)}&u=${encodeURIComponent((u.unidad || "").trim())}`;
+    const hayPorteria = ed.unidades.some(x => esPorteria(x) && x !== u);
     const texto = `Hola! Para recibir el timbre de ${u.unidad} (${ed.nombre || "el edificio"}) con videollamada en tu celular:\n\n` +
       `1) Instalá la app "ntfy" (gratis, Android y iPhone).\n2) Tocá "+" y suscribite a este canal:\n${u.topic}\n\n` +
-      `No compartas este código: es la llave de tu timbre.`;
+      (hayPorteria ? `Para llamar a la portería por video desde tu celular, abrí y guardá este link:\n${linkVecino}\n\n` : "") +
+      `No compartas el código ni el link: son la llave de tu timbre.`;
     try { if (navigator.share) return await navigator.share({ text: texto }); } catch { return; }
     try { await navigator.clipboard.writeText(texto); alert("Mensaje copiado. Pegalo en WhatsApp para el vecino."); }
     catch { prompt("Copiá este mensaje:", texto); }
@@ -745,7 +900,7 @@ async function adminEdificio(archivo) {
               <button class="btn sm red" data-del="${i}" aria-label="Borrar ${esc(u.unidad || "departamento")}">✕</button>
               <div style="grid-column:1/-1"><small>Canal: <code>${esc(u.topic)}</code></small>
                 <button class="btn sm ghost" data-share="${i}">Enviar al vecino</button>
-                ${puerta.estado ? `<button class="btn sm ghost" data-pin="${i}">🔑 PIN puerta</button>${puerta.estado.conPin.includes((u.unidad || "").trim()) ? `<span class="pinTag">PIN ✓</span>` : ""}` : ""}</div>
+                ${puerta.estado ? `<button class="btn sm ghost" data-pin="${i}">🔑 PIN puerta</button>${puerta.estado.conPin.includes((u.unidad || "").trim()) ? `<span class="pinTag">PIN ✓</span>` : ""}${puerta.estado.caras?.[(u.unidad || "").trim()] ? `<span class="pinTag">🙂 ${puerta.estado.caras[(u.unidad || "").trim()]}</span> <button class="btn sm ghost" data-borrarcaras="${i}">Borrar caras</button>` : ""}` : ""}</div>
             </div>`).join("")}
         </div>
         <div style="margin-top:12px">
@@ -796,6 +951,14 @@ async function adminEdificio(archivo) {
         <p style="margin:8px 0"><code id="kioscoUrl">${esc(urlKiosco(archivo))}</code></p>
         <button class="btn sm" id="copiarKiosco">Copiar link</button>
         <a class="btn sm ghost" href="${urlKiosco(archivo)}" target="_blank" rel="noopener">Probar</a>
+        ${puerta.estado ? `
+        <h2 style="margin-top:16px">Cara + PIN en la tablet</h2>
+        <small>La tablet reconoce al propietario y le pide su PIN para abrir. Cada vecino registra su cara en la tablet con su PIN.
+          ${puerta.estado.tablet ? "Ya hay una tablet activada. Si generás un link nuevo, la tablet anterior deja de reconocer caras." : ""}</small><br>
+        ${puerta.linkTablet ? `<p style="margin:8px 0"><code>${esc(puerta.linkTablet)}</code></p>
+          <button class="btn sm" id="copiarTablet">Copiar link con caras</button>
+          <p style="margin:6px 0 0"><small>Guardalo ahora: por seguridad no se vuelve a mostrar. Pegalo como página de inicio en FreeKiosk.</small></p>`
+        : `<button class="btn sm" id="activarTablet" style="margin-top:8px" ${puerta.estado.equipo ? "" : "disabled"}>${puerta.estado.tablet ? "Generar link nuevo" : "Activar en la tablet"}</button>`}` : ""}
       </section>
 
       ${cajaGitHub(msgOnline)}
@@ -832,6 +995,24 @@ async function adminEdificio(archivo) {
       if (puerta.estado) LS("puerta_admin", puerta.clave);
       render();
     };
+    if ($("activarTablet")) $("activarTablet").onclick = async () => {
+      if (puerta.estado.tablet && !confirm("La tablet que ya está activada va a dejar de reconocer caras hasta que cargues el link nuevo. ¿Seguir?")) return;
+      try {
+        const r = await puertaApi({ accion: "admin_kiosco", admin: puerta.clave, edificio: archivo });
+        puerta.linkTablet = urlKiosco(archivo) + "&k=" + encodeURIComponent(r.k);
+        await cargarPuerta(); render();
+      } catch (e) { alert("No se pudo activar: " + e.message); }
+    };
+    if ($("copiarTablet")) $("copiarTablet").onclick = async () => {
+      try { await navigator.clipboard.writeText(puerta.linkTablet); $("copiarTablet").textContent = "✔ Copiado"; }
+      catch { prompt("Copiá este link:", puerta.linkTablet); }
+    };
+    app.querySelectorAll("[data-borrarcaras]").forEach(b => b.onclick = async () => {
+      const unidad = (ed.unidades[+b.dataset.borrarcaras].unidad || "").trim();
+      if (!confirm(`¿Borrar todas las caras registradas de ${unidad}?`)) return;
+      try { await puertaApi({ accion: "admin_borrar_caras", admin: puerta.clave, edificio: archivo, unidad }); await cargarPuerta(); render(); }
+      catch (e) { alert("No se pudo borrar: " + e.message); }
+    });
     if ($("pSalir")) $("pSalir").onclick = () => { LS("puerta_admin", null); puerta = { clave: "", estado: null, msg: "" }; render(); };
     const pEst = (t, c) => { $("pSt").className = "status " + (c || ""); $("pSt").textContent = t; };
     if ($("pGuardar")) $("pGuardar").onclick = async () => {
@@ -922,9 +1103,204 @@ const Kiosco = (() => {
 })();
 
 
+// =====================================================================
+//  CARA + PIN en la tablet (edificio.html?kiosco=1&k=CLAVE_DE_TABLET)
+//  La cara solo identifica al propietario: para abrir siempre se pide el PIN.
+// =====================================================================
+const FACE_LIB = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1/dist/face-api.js";
+const FACE_MODELS = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1/model/";
+const PLACA_TOP = '<div class="plate-top"><span class="led" aria-hidden="true"></span><span class="grille" aria-hidden="true"></span></div>';
+const dormir = ms => new Promise(r => setTimeout(r, ms));
+
+const Caras = (() => {
+  let listo = null, stream = null, loopT = null, pausaHasta = 0, ocupado = false;
+
+  function cargar() {
+    if (listo) return listo;
+    listo = new Promise((res, rej) => {
+      if (window.faceapi) return res();
+      const s = document.createElement("script"); s.src = FACE_LIB; s.onload = res; s.onerror = () => rej(new Error("No se pudo cargar el reconocimiento facial."));
+      document.head.appendChild(s);
+    }).then(() => Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(FACE_MODELS),
+      faceapi.nets.faceLandmark68Net.loadFromUri(FACE_MODELS),
+      faceapi.nets.faceRecognitionNet.loadFromUri(FACE_MODELS),
+    ]));
+    listo.catch(() => { listo = null; });
+    return listo;
+  }
+  async function camara(video) {
+    if (!stream || !stream.active) stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user", width: { ideal: 640 } }, audio: false });
+    video.srcObject = stream; await video.play().catch(() => {});
+    if (!video.videoWidth) await new Promise(r => video.onloadedmetadata = r);
+  }
+  function parar() { clearTimeout(loopT); loopT = null; if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } }
+  const pausar = ms => { pausaHasta = Date.now() + ms; };
+
+  // Lee una cara del video. minAncho: qué tan cerca tiene que estar (fracción del ancho)
+  async function leer(video, minAncho) {
+    const det = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+      .withFaceLandmarks().withFaceDescriptor();
+    if (!det) return null;
+    if (det.detection.box.width / (video.videoWidth || 1) < minAncho) return { lejos: true };
+    return { d: Array.from(det.descriptor) };
+  }
+
+  // Pantalla de departamentos: mira la cámara y avisa cuando reconoce a un propietario
+  async function vigilar(video, alEstado, alReconocer) {
+    clearTimeout(loopT);
+    try { await cargar(); await camara(video); } catch (e) { alEstado("error"); return; }
+    alEstado("listo");
+    const paso = async () => {
+      if (!video.isConnected) return;
+      if (Date.now() >= pausaHasta && !ocupado && !document.querySelector(".overlay")) {
+        try {
+          const r = await leer(video, 0.2);
+          if (r && r.lejos) alEstado("lejos");
+          else if (r && r.d) {
+            ocupado = true; alEstado("buscando");
+            const res = await puertaApi({ accion: "identificar", edificio: ARCHIVO, k: KTOKEN, descriptor: r.d }).catch(() => null);
+            ocupado = false;
+            if (res && res.unidad) { pausar(20000); alEstado("listo"); alReconocer(res.unidad); }
+            else { pausar(3000); alEstado("desconocido"); }
+          } else alEstado("listo");
+        } catch { ocupado = false; }
+      }
+      loopT = setTimeout(paso, 500);
+    };
+    paso();
+  }
+
+  // Registro: junta 5 lecturas parecidas y devuelve el promedio
+  async function capturar(video, alProgreso) {
+    const m = [];
+    for (let i = 0; i < 50 && m.length < 5; i++) {
+      const r = await leer(video, 0.18).catch(() => null);
+      if (r && r.d) { m.push(r.d); alProgreso(m.length, false); } else alProgreso(m.length, !!(r && r.lejos));
+      await dormir(300);
+    }
+    if (m.length < 5) return null;
+    const prom = m[0].map((_, i) => m.reduce((s, v) => s + v[i], 0) / m.length);
+    const dist = (a, b) => Math.sqrt(a.reduce((s, x, i) => s + (x - b[i]) ** 2, 0));
+    return m.every(v => dist(v, prom) < 0.45) ? prom : null;
+  }
+  return { cargar, camara, parar, pausar, vigilar, capturar };
+})();
+
+// Teclado numérico en pantalla para el PIN
+function teclado(cont, alConfirmar, textoOk = "Abrir") {
+  let v = "";
+  cont.innerHTML = `<div class="pinDots" aria-live="polite"></div>
+    <div class="keypad">${["1","2","3","4","5","6","7","8","9","⌫","0","ok"].map(k =>
+      `<button type="button" class="key${k === "ok" ? " ok" : ""}" data-k="${k}">${k === "ok" ? textoOk : k}</button>`).join("")}</div>`;
+  const dots = cont.querySelector(".pinDots");
+  const pintar = () => { dots.textContent = v ? "●".repeat(v.length) : "Ingresá tu PIN"; dots.classList.toggle("vacio", !v); };
+  pintar();
+  cont.querySelectorAll(".key").forEach(b => b.onclick = () => {
+    const k = b.dataset.k;
+    if (k === "⌫") v = v.slice(0, -1);
+    else if (k === "ok") { if (v.length >= 4) alConfirmar(v); }
+    else if (v.length < 8) v += k;
+    pintar();
+  });
+  return { limpiar() { v = ""; pintar(); }, bloquear(si) { cont.querySelectorAll(".key").forEach(b => b.disabled = si); } };
+}
+
+// Propietario reconocido: "Hola" + PIN para abrir
+function holaPropietario(ed, unidad) {
+  if (document.querySelector(".overlay")) return;
+  const u = (ed.unidades || []).find(x => x.unidad === unidad) || { unidad };
+  const ov = document.createElement("div"); ov.className = "overlay";
+  ov.innerHTML = `<section class="plate" role="dialog" aria-label="Abrir la puerta">
+      ${PLACA_TOP}
+      <div class="nameplate"><small>Hola</small><strong>${esc(u.nombre || u.unidad)}</strong></div>
+      <p class="sub">${u.nombre ? esc(u.unidad) + ". " : ""}Ingresá tu PIN para abrir la puerta.</p>
+      <div class="kp"></div>
+      <div class="status" role="status" aria-live="polite"></div>
+      <button type="button" class="btn ghost noSoy">No soy yo</button>
+    </section>`;
+  document.body.appendChild(ov);
+  const st = ov.querySelector(".status");
+  let t;
+  const cerrar = () => { clearTimeout(t); ov.remove(); Caras.pausar(6000); };
+  const reiniciarEspera = () => { clearTimeout(t); t = setTimeout(cerrar, 25000); };
+  reiniciarEspera();
+  ov.addEventListener("pointerdown", reiniciarEspera);
+  ov.querySelector(".noSoy").onclick = cerrar;
+  const kp = teclado(ov.querySelector(".kp"), async (pin) => {
+    kp.bloquear(true); st.className = "status"; st.textContent = "Abriendo…";
+    try {
+      await puertaApi({ accion: "abrir", edificio: ARCHIVO, unidad: u.unidad, pin, k: KTOKEN });
+      st.className = "status ok"; st.textContent = "🔓 Puerta abierta. ¡Bienvenido!";
+      Caras.pausar(30000); setTimeout(cerrar, 3500);
+    } catch (e) {
+      st.className = "status err"; st.textContent = e.message; kp.limpiar(); kp.bloquear(false);
+      if (e.status === 429) setTimeout(cerrar, 4000);
+    }
+  });
+}
+
+// Registro de la cara de un propietario (en la tablet, con su PIN)
+function registrarCara(ed) {
+  Kiosco.volverEn(90);
+  const unidades = (ed.unidades || []).filter(u => u.topic);
+  app.innerHTML = `
+    <button class="back" id="volver" style="color:#d9e6e9">← Volver</button>
+    <section class="plate">
+      ${PLACA_TOP}
+      <div class="nameplate"><small>Propietarios</small><strong>Registrar mi cara</strong></div>
+      <div id="paso"></div>
+    </section>`;
+  $("volver").onclick = () => portero();
+  const paso = $("paso");
+
+  // 1) elegir departamento
+  paso.innerHTML = `<p class="sub" style="margin:12px 0 0">¿En qué departamento vivís?</p>
+    <div class="directory">${unidades.map((u, i) => `<button class="unit" data-i="${i}"><b>${esc(u.unidad)}</b><span>${esc(u.nombre || "")}</span><i aria-hidden="true"></i></button>`).join("")}</div>`;
+  paso.querySelectorAll(".unit").forEach(b => b.onclick = () => pedirPin(unidades[+b.dataset.i]));
+
+  // 2) PIN + consentimiento
+  function pedirPin(u) {
+    paso.innerHTML = `<p class="sub" style="margin:12px 0 4px">${esc(u.unidad)}: ingresá tu PIN de apertura.</p>
+      <label class="check" style="margin:8px 0 10px;text-align:left"><input type="checkbox" id="acepto">
+        Acepto que se guarde un patrón de mi cara para reconocerme en esta puerta. Puedo pedir que lo borren cuando quiera.</label>
+      <div class="kp"></div><div class="status" id="rst"></div>`;
+    const kp = teclado(paso.querySelector(".kp"), (pin) => {
+      if (!$("acepto").checked) { $("rst").className = "status err"; $("rst").textContent = "Marcá la casilla para continuar."; return; }
+      sacarFoto(u, pin);
+    }, "Seguir");
+  }
+
+  // 3) captura
+  async function sacarFoto(u, pin) {
+    paso.innerHTML = `<p class="sub" style="margin:12px 0 0">Mirá a la cámara, a un brazo de distancia, sin anteojos de sol ni gorra.</p>
+      <div class="screen"><video id="rvid" autoplay playsinline muted class="espejo"></video></div>
+      <div class="status" id="rst">Preparando la cámara…</div>`;
+    try { await Caras.cargar(); await Caras.camara($("rvid")); }
+    catch { $("rst").className = "status err"; $("rst").textContent = "No se pudo usar la cámara."; return; }
+    const d = await Caras.capturar($("rvid"), (n, lejos) => {
+      if (!$("rst")) return;
+      $("rst").className = "status"; $("rst").textContent = lejos ? "Acercate un poco más." : `Leyendo tu cara… ${n} de 5`;
+    });
+    if (!$("rst")) return;
+    if (!d) { $("rst").className = "status err"; $("rst").innerHTML = `No pudimos leer bien tu cara. <button class="btn sm" id="otra">Probar de nuevo</button>`; $("otra").onclick = () => sacarFoto(u, pin); return; }
+    $("rst").className = "status"; $("rst").textContent = "Guardando…";
+    try {
+      await puertaApi({ accion: "registrar_cara", edificio: ARCHIVO, k: KTOKEN, unidad: u.unidad, pin, descriptor: d });
+      paso.innerHTML = `<p class="status ok" style="margin-top:16px">✅ Listo. La próxima vez acercate a la tablet y te va a reconocer.</p>`;
+      Kiosco.volverEn(6);
+    } catch (e) {
+      $("rst").className = "status err"; $("rst").textContent = e.message;
+      if (e.status === 401 || e.status === 400) { setTimeout(() => pedirPin(u), 2000); }
+    }
+  }
+}
+
+
 // ---- Arranque (al final, cuando todo está definido) ----
 if (params.has("admin")) (params.get("e") ? adminEdificio(ARCHIVO) : adminLista());
 else if (params.get("atender")) atender();
+else if (params.has("vecino")) vecinoPantalla();
 else portero();
 </script>
 </body>
