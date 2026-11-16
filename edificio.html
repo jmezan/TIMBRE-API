@@ -31,6 +31,7 @@
   .btn { display:inline-block; padding:11px 16px; border-radius:12px; background:var(--fg); color:#fff; border:none; font:inherit; cursor:pointer; text-decoration:none; margin:4px; }
   .btn.blue { background:var(--blue); } .btn.red { background:#c62828; } .btn.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
   .btn.sm { padding:7px 11px; font-size:.85rem; }
+  .btn:disabled { opacity:.55; }
   .back { background:none; border:none; color:var(--blue); font:inherit; cursor:pointer; padding:0; margin-bottom:14px; }
   .box { background:#fff; border-radius:16px; padding:18px; margin:14px 0; text-align:left; }
   .row { display:grid; grid-template-columns:80px 1fr auto; gap:8px; align-items:start; border-top:1px solid var(--line); padding-top:10px; margin-top:10px; }
@@ -281,24 +282,76 @@ function atender() {
 //  ADMINISTRACIÓN: armar la lista de departamentos y el QR
 // =====================================================================
 async function admin() {
-  const KEY = "portero_admin_" + ARCHIVO;
-  let ed = null;
-  try { ed = JSON.parse(localStorage.getItem(KEY)); } catch {}
-  if (!ed) {
-    try { const r = await fetch(ARCHIVO + "?v=" + Date.now(), { cache: "no-store" }); if (r.ok) ed = await r.json(); } catch {}
-  }
+  // ---- Conexión con GitHub (guardado online) ----
+  const LS = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch {} };
+  const host = location.hostname.endsWith(".github.io") ? location.hostname.split(".")[0] : "";
+  const repoPath = location.pathname.split("/").filter(Boolean);
+  let gh = {
+    owner: LS("portero_owner") || host,
+    repo: LS("portero_repo") || (repoPath.length > 1 ? repoPath[0] : (host ? host + ".github.io" : "")),
+    token: LS("portero_token") || ""
+  };
+  const carpeta = "";  // el JSON va en la raíz del repo, junto a esta página
+  const API = () => `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${carpeta}${ARCHIVO}`;
+  const hdr = () => ({ "Authorization": "Bearer " + gh.token, "Accept": "application/vnd.github+json" });
+  const b64enc = s => { const b = new TextEncoder().encode(s); let r = ""; b.forEach(x => r += String.fromCharCode(x)); return btoa(r); };
+  const b64dec = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g, "")), c => c.charCodeAt(0)));
+
+  let sha = null, sucio = false, ed = null, msgOnline = "";
+
+  const leerOnline = async () => {
+    const r = await fetch(API() + "?t=" + Date.now(), { headers: hdr(), cache: "no-store" });
+    if (r.status === 404) { sha = null; return null; }
+    if (!r.ok) throw new Error(r.status === 401 ? "Token inválido o vencido." : "No se pudo leer el repo (" + r.status + ").");
+    const j = await r.json(); sha = j.sha;
+    return JSON.parse(b64dec(j.content));
+  };
+
+  // Carga inicial: online (si hay token) → archivo publicado → borrador local
+  if (gh.token) { try { ed = await leerOnline(); msgOnline = "✅ Conectado a GitHub."; } catch (e) { msgOnline = "⚠️ " + e.message; } }
+  if (!ed) { try { const r = await fetch(ARCHIVO + "?v=" + Date.now(), { cache: "no-store" }); if (r.ok) ed = await r.json(); } catch {} }
+  if (!ed) { try { ed = JSON.parse(LS("portero_borrador_" + ARCHIVO)); } catch {} }
   if (!ed) ed = { nombre: "", direccion: "", unidades: [] };
   ed.unidades = ed.unidades || [];
 
-  const guardar = () => { try { localStorage.setItem(KEY, JSON.stringify(ed)); } catch {} };
+  const limpio = () => ({ nombre: (ed.nombre || "").trim(), direccion: (ed.direccion || "").trim(),
+    unidades: ed.unidades.filter(u => (u.unidad || "").trim()).map(u => ({ unidad: u.unidad.trim(), nombre: (u.nombre || "").trim(), topic: u.topic })) });
+
+  const marcarCambio = () => {
+    sucio = true; LS("portero_borrador_" + ARCHIVO, JSON.stringify(ed));
+    const b = $("save"); if (b) { b.disabled = false; b.textContent = "💾 Guardar cambios"; }
+    const s = $("saveSt"); if (s) { s.className = "status"; s.textContent = "Hay cambios sin guardar."; }
+  };
   const nuevoTopic = () => "portero-" + crypto.getRandomValues(new Uint32Array(3)).join("").slice(0, 18);
+
+  const guardarOnline = async () => {
+    const s = $("saveSt"), b = $("save");
+    if (!gh.token) { s.className = "status err"; s.textContent = "Primero conectá GitHub (abajo)."; return; }
+    b.disabled = true; s.className = "status"; s.textContent = "Guardando…";
+    try {
+      // Pedimos el sha actual por si alguien más cambió el archivo
+      try { const r = await fetch(API() + "?t=" + Date.now(), { headers: hdr(), cache: "no-store" }); if (r.ok) sha = (await r.json()).sha; else if (r.status === 404) sha = null; } catch {}
+      const body = { message: "Portero: actualizar departamentos", content: b64enc(JSON.stringify(limpio(), null, 2)) };
+      if (sha) body.sha = sha;
+      const r = await fetch(API(), { method: "PUT", headers: { ...hdr(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(r.status === 401 ? "Token inválido o vencido." : r.status === 403 || r.status === 404 ? "El token no tiene permiso de escritura en este repo." : "Error " + r.status);
+      sha = (await r.json()).content.sha;
+      sucio = false; LS("portero_borrador_" + ARCHIVO, null);
+      s.className = "status ok"; s.textContent = "✅ Guardado. Los visitantes lo ven en 1-2 minutos.";
+      b.textContent = "✔ Guardado";
+    } catch (e) {
+      s.className = "status err"; s.textContent = "No se pudo guardar: " + e.message; b.disabled = false;
+    }
+  };
+
+  window.onbeforeunload = () => sucio ? "Hay cambios sin guardar" : undefined;
 
   const render = () => {
     const urlQR = ARCHIVO === "edificio.json" ? BASE : `${BASE}?e=${encodeURIComponent(ARCHIVO)}`;
     const qr = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=20&data=${encodeURIComponent(urlQR)}`;
     app.innerHTML = `
       <h1>Configurar portero</h1>
-      <p>Cargá los departamentos, descargá <code>${esc(ARCHIVO)}</code> y subilo al repo junto a esta página.</p>
+      <p>Los cambios se guardan online con un toque.</p>
 
       <div class="box">
         <h2>Edificio</h2>
@@ -325,10 +378,23 @@ async function admin() {
         </div>
       </div>
 
-      <div class="box" style="text-align:center">
-        <h2>Guardar</h2>
-        <button class="btn blue" id="dl">⬇️ Descargar ${esc(ARCHIVO)}</button>
-        <p style="margin:10px 0 0"><small>Cada vez que cambies la lista, volvé a subir este archivo al repo. El QR no cambia.</small></p>
+      <div class="box" style="text-align:center;position:sticky;bottom:10px;box-shadow:0 6px 24px rgba(0,0,0,.12)">
+        <button class="btn blue" id="save" ${sucio ? "" : "disabled"}>${sucio ? "💾 Guardar cambios" : "✔ Todo guardado"}</button>
+        <div class="status" id="saveSt">${sucio ? "Hay cambios sin guardar." : ""}</div>
+      </div>
+
+      <div class="box">
+        <h2>Conexión con GitHub ${gh.token ? "✅" : ""}</h2>
+        <div class="status" style="font-weight:500">${esc(msgOnline)}</div>
+        ${gh.token ? `
+          <small>Repo: <code>${esc(gh.owner)}/${esc(gh.repo)}</code>. El token queda guardado solo en este celular.</small><br>
+          <button class="btn sm ghost" id="desc">Desconectar</button>` : `
+          <small>Se hace una sola vez. Creá un token en GitHub con acceso <b>solo a este repo</b> y permiso <b>Contents: Read and write</b>.</small><br>
+          <a class="btn sm" href="https://github.com/settings/personal-access-tokens/new" target="_blank">Crear token en GitHub</a>
+          <input id="ghOwner" placeholder="Usuario de GitHub" value="${esc(gh.owner)}" style="margin-top:10px">
+          <input id="ghRepo" placeholder="Nombre del repo" value="${esc(gh.repo)}">
+          <input id="ghTok" placeholder="Pegá el token (github_pat_…)" autocomplete="off">
+          <button class="btn blue" id="conectar">Conectar</button>`}
       </div>
 
       <div class="box" style="text-align:center">
@@ -337,30 +403,46 @@ async function admin() {
         <code>${esc(urlQR)}</code><br>
         <a class="btn" href="${qr}" download="portero-qr.png" target="_blank">Descargar QR</a>
         <a class="btn ghost" href="${urlQR}" target="_blank">Probar</a>
+        <p style="margin:10px 0 0"><small>El QR no cambia nunca, aunque modifiques los departamentos.</small></p>
       </div>`;
 
-    $("edNom").oninput = e => { ed.nombre = e.target.value; guardar(); };
-    $("edDir").oninput = e => { ed.direccion = e.target.value; guardar(); };
-    app.querySelectorAll("[data-k]").forEach(inp => inp.oninput = () => { ed.unidades[+inp.dataset.i][inp.dataset.k] = inp.value; guardar(); });
+    $("edNom").oninput = e => { ed.nombre = e.target.value; marcarCambio(); };
+    $("edDir").oninput = e => { ed.direccion = e.target.value; marcarCambio(); };
+    app.querySelectorAll("[data-k]").forEach(inp => inp.oninput = () => { ed.unidades[+inp.dataset.i][inp.dataset.k] = inp.value; marcarCambio(); });
     app.querySelectorAll("[data-del]").forEach(b => b.onclick = () => {
       const u = ed.unidades[+b.dataset.del];
-      if (confirm(`¿Borrar ${u.unidad || "este departamento"}?`)) { ed.unidades.splice(+b.dataset.del, 1); guardar(); render(); }
+      if (confirm(`¿Borrar ${u.unidad || "este departamento"}?`)) { ed.unidades.splice(+b.dataset.del, 1); marcarCambio(); render(); }
     });
     app.querySelectorAll("[data-share]").forEach(b => b.onclick = () => compartir(ed.unidades[+b.dataset.share]));
-    $("add").onclick = () => { ed.unidades.push({ unidad: "", nombre: "", topic: nuevoTopic() }); guardar(); render(); };
+    $("add").onclick = () => { ed.unidades.push({ unidad: "", nombre: "", topic: nuevoTopic() }); marcarCambio(); render(); };
     $("bulk").onclick = () => {
       const pisos = parseInt(prompt("¿Cuántos pisos?", "5"), 10);
       const letras = (prompt("Letras por piso (separadas por coma)", "A,B,C,D") || "").split(",").map(s => s.trim()).filter(Boolean);
       if (!pisos || !letras.length) return;
       if (confirm("¿Agregar también Portería / Encargado?")) ed.unidades.push({ unidad: "Portería", nombre: "", topic: nuevoTopic() });
       for (let p = 1; p <= pisos; p++) for (const l of letras) ed.unidades.push({ unidad: `${p}° ${l}`, nombre: "", topic: nuevoTopic() });
-      guardar(); render();
+      marcarCambio(); render();
     };
-    $("dl").onclick = () => {
-      const limpio = { nombre: ed.nombre, direccion: ed.direccion,
-        unidades: ed.unidades.filter(u => u.unidad.trim()).map(u => ({ unidad: u.unidad.trim(), nombre: (u.nombre || "").trim(), topic: u.topic })) };
-      const blob = new Blob([JSON.stringify(limpio, null, 2)], { type: "application/json" });
-      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = ARCHIVO; a.click();
+    $("save").onclick = guardarOnline;
+    if ($("desc")) $("desc").onclick = () => { if (confirm("¿Desconectar GitHub de este celular?")) { LS("portero_token", null); gh.token = ""; msgOnline = ""; render(); } };
+    if ($("conectar")) $("conectar").onclick = async () => {
+      gh = { owner: $("ghOwner").value.trim(), repo: $("ghRepo").value.trim(), token: $("ghTok").value.trim() };
+      if (!gh.owner || !gh.repo || !gh.token) { alert("Completá usuario, repo y token."); return; }
+      $("conectar").disabled = true; $("conectar").textContent = "Verificando…";
+      try {
+        const r = await fetch(`https://api.github.com/repos/${gh.owner}/${gh.repo}`, { headers: hdr() });
+        if (!r.ok) throw new Error(r.status === 401 ? "Token inválido." : "No encuentro ese repo con ese token.");
+        const j = await r.json();
+        if (j.permissions && !j.permissions.push) throw new Error("El token no tiene permiso de escritura.");
+        LS("portero_token", gh.token); LS("portero_owner", gh.owner); LS("portero_repo", gh.repo);
+        msgOnline = "✅ Conectado a GitHub.";
+        // Si ya existe un archivo online y no hay cambios locales, lo cargamos
+        if (!sucio) { try { const on = await leerOnline(); if (on) { ed = on; ed.unidades = ed.unidades || []; } } catch {} }
+        else { try { await leerOnline(); } catch {} }
+      } catch (e) {
+        gh.token = ""; msgOnline = "⚠️ " + e.message;
+      }
+      render();
     };
   };
 
