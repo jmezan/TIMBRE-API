@@ -180,15 +180,13 @@ const COOLDOWN_SEG = 30;
 const ESPERA_VIDEO_SEG = 120;
 
 const params = new URLSearchParams(location.search);
-const ARCHIVO = params.get("e") || "edificio.json";   // permite varios edificios en el mismo repo
+const _e = params.get("e") || "";
+const ARCHIVO = /^[a-z0-9._-]+\.json$/i.test(_e) && _e !== "edificios.json" ? _e : "edificio.json";   // cada edificio es un archivo .json del repo
 const app = document.getElementById("app");
 const $ = id => document.getElementById(id);
 const BASE = location.href.split("?")[0];
 const BELL_SVG = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>`;
 
-if (params.has("admin")) admin();
-else if (params.get("atender")) atender();
-else portero();
 
 // =====================================================================
 //  VISITANTE: elige departamento y toca el timbre (con videollamada)
@@ -419,38 +417,161 @@ function atender() {
 }
 
 // =====================================================================
-//  ADMINISTRACIÓN: armar la lista de departamentos y el QR
+//  ADMINISTRACIÓN: varios edificios en el mismo panel
 // =====================================================================
-async function admin() {
-  // ---- Conexión con GitHub (guardado online) ----
-  const LS = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch {} };
+// Archivos en el repo:
+//   edificios.json         → lista de edificios [{ archivo, nombre, unidades }]
+//   edificio.json          → el primer edificio (su QR no lleva ?e=)
+//   edificio-<nombre>.json → cada edificio nuevo (su QR lleva ?e=<archivo>)
+
+const LS = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch {} };
+const REGISTRO = "edificios.json";
+const urlVisitante = (archivo) => archivo === "edificio.json" ? BASE : `${BASE}?e=${encodeURIComponent(archivo)}`;
+const urlAdmin = (archivo) => archivo ? `${BASE}?admin&e=${encodeURIComponent(archivo)}` : `${BASE}?admin`;
+const qrDe = (url) => `https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=20&data=${encodeURIComponent(url)}`;
+
+// ---- GitHub: leer y guardar archivos del repo ----
+const GH = (() => {
   const host = location.hostname.endsWith(".github.io") ? location.hostname.split(".")[0] : "";
-  const repoPath = location.pathname.split("/").filter(Boolean);
-  let gh = {
+  const partes = location.pathname.split("/").filter(Boolean);
+  const cfg = {
     owner: LS("portero_owner") || host,
-    repo: LS("portero_repo") || (repoPath.length > 1 ? repoPath[0] : (host ? host + ".github.io" : "")),
+    repo: LS("portero_repo") || (partes.length > 1 ? partes[0] : (host ? host + ".github.io" : "")),
     token: LS("portero_token") || ""
   };
-  const carpeta = "";  // el JSON va en la raíz del repo, junto a esta página
-  const API = () => `https://api.github.com/repos/${gh.owner}/${gh.repo}/contents/${carpeta}${ARCHIVO}`;
-  const hdr = () => ({ "Authorization": "Bearer " + gh.token, "Accept": "application/vnd.github+json" });
-  const b64enc = s => { const b = new TextEncoder().encode(s); let r = ""; b.forEach(x => r += String.fromCharCode(x)); return btoa(r); };
-  const b64dec = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g, "")), c => c.charCodeAt(0)));
+  const hdr = () => ({ "Authorization": "Bearer " + cfg.token, "Accept": "application/vnd.github+json" });
+  const api = (p) => `https://api.github.com/repos/${cfg.owner}/${cfg.repo}/contents/${p}`;
+  const enc = s => { const b = new TextEncoder().encode(s); let r = ""; b.forEach(x => r += String.fromCharCode(x)); return btoa(r); };
+  const dec = s => new TextDecoder().decode(Uint8Array.from(atob(s.replace(/\n/g, "")), c => c.charCodeAt(0)));
+  const fallo = (st) => new Error(st === 401 ? "Token inválido o vencido." : (st === 403 || st === 404) ? "El token no tiene permiso de escritura en este repo." : "Error " + st);
 
-  let sha = null, sucio = false, ed = null, msgOnline = "";
+  async function leer(path) {               // → { data, sha } o null si no existe
+    if (!cfg.token) {
+      const r = await fetch(path + "?v=" + Date.now(), { cache: "no-store" });
+      return r.ok ? { data: await r.json(), sha: null } : null;
+    }
+    const r = await fetch(api(path) + "?t=" + Date.now(), { headers: hdr(), cache: "no-store" });
+    if (r.status === 404) return null;
+    if (!r.ok) throw fallo(r.status);
+    const j = await r.json();
+    return { data: JSON.parse(dec(j.content)), sha: j.sha };
+  }
+  async function sha(path) {
+    const r = await fetch(api(path) + "?t=" + Date.now(), { headers: hdr(), cache: "no-store" });
+    return r.ok ? (await r.json()).sha : null;
+  }
+  async function guardar(path, obj, mensaje) {
+    if (!cfg.token) throw new Error("Primero conectá GitHub.");
+    const body = { message: mensaje, content: enc(JSON.stringify(obj, null, 2)) };
+    const s = await sha(path); if (s) body.sha = s;
+    const r = await fetch(api(path), { method: "PUT", headers: { ...hdr(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw fallo(r.status);
+  }
+  async function borrar(path, mensaje) {
+    const s = await sha(path); if (!s) return;
+    const r = await fetch(api(path), { method: "DELETE", headers: { ...hdr(), "Content-Type": "application/json" }, body: JSON.stringify({ message: mensaje, sha: s }) });
+    if (!r.ok) throw fallo(r.status);
+  }
+  async function conectar(owner, repo, token) {
+    const r = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers: { "Authorization": "Bearer " + token, "Accept": "application/vnd.github+json" } });
+    if (!r.ok) throw new Error(r.status === 401 ? "Token inválido." : "No encuentro ese repo con ese token.");
+    const j = await r.json();
+    if (j.permissions && !j.permissions.push) throw new Error("El token no tiene permiso de escritura.");
+    Object.assign(cfg, { owner, repo, token });
+    LS("portero_token", token); LS("portero_owner", owner); LS("portero_repo", repo);
+  }
+  function desconectar() { cfg.token = ""; LS("portero_token", null); }
+  return { cfg, leer, guardar, borrar, conectar, desconectar };
+})();
 
-  const leerOnline = async () => {
-    const r = await fetch(API() + "?t=" + Date.now(), { headers: hdr(), cache: "no-store" });
-    if (r.status === 404) { sha = null; return null; }
-    if (!r.ok) throw new Error(r.status === 401 ? "Token inválido o vencido." : "No se pudo leer el repo (" + r.status + ").");
-    const j = await r.json(); sha = j.sha;
-    return JSON.parse(b64dec(j.content));
+// Caja "Conexión con GitHub" (la usan las dos pantallas)
+function cajaGitHub(msg) {
+  const c = GH.cfg;
+  return `<section class="box">
+    <h2>Conexión con GitHub ${c.token ? "✅" : ""}</h2>
+    ${msg ? `<div class="status" style="font-weight:500">${esc(msg)}</div>` : ""}
+    ${c.token ? `
+      <small>Repo: <code>${esc(c.owner)}/${esc(c.repo)}</code>. El token queda guardado solo en este dispositivo.</small><br>
+      <button class="btn sm ghost" id="desc">Desconectar</button>` : `
+      <small>Se hace una sola vez. Creá un token en GitHub con acceso <b>solo a este repo</b> y permiso <b>Contents: Read and write</b>.</small><br>
+      <a class="btn sm" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Crear token en GitHub</a>
+      <input id="ghOwner" placeholder="Usuario de GitHub" value="${esc(c.owner)}" style="margin-top:10px">
+      <input id="ghRepo" placeholder="Nombre del repo" value="${esc(c.repo)}">
+      <input id="ghTok" placeholder="Pegá el token (github_pat_…)" autocomplete="off">
+      <button class="btn blue" id="conectar">Conectar</button>`}
+  </section>`;
+}
+function bindGitHub(alCambiar) {
+  if ($("desc")) $("desc").onclick = () => { if (confirm("¿Desconectar GitHub de este dispositivo?")) { GH.desconectar(); alCambiar(""); } };
+  if ($("conectar")) $("conectar").onclick = async () => {
+    const o = $("ghOwner").value.trim(), r = $("ghRepo").value.trim(), t = $("ghTok").value.trim();
+    if (!o || !r || !t) return alert("Completá usuario, repo y token.");
+    $("conectar").disabled = true; $("conectar").textContent = "Verificando…";
+    try { await GH.conectar(o, r, t); alCambiar("✅ Conectado a GitHub."); }
+    catch (e) { alCambiar("⚠️ " + e.message); }
   };
+}
 
-  // Carga inicial: online (si hay token) → archivo publicado → borrador local
-  if (gh.token) { try { ed = await leerOnline(); msgOnline = "✅ Conectado a GitHub."; } catch (e) { msgOnline = "⚠️ " + e.message; } }
-  if (!ed) { try { const r = await fetch(ARCHIVO + "?v=" + Date.now(), { cache: "no-store" }); if (r.ok) ed = await r.json(); } catch {} }
-  if (!ed) { try { ed = JSON.parse(LS("portero_borrador_" + ARCHIVO)); } catch {} }
+// ---- Lista de edificios (registro) ----
+async function leerRegistro() {
+  const reg = await GH.leer(REGISTRO).catch(e => { throw e; });
+  if (reg && Array.isArray(reg.data)) return reg.data;
+  // Primera vez: si ya existía un edificio.json, lo sumamos a la lista
+  const viejo = await GH.leer("edificio.json").catch(() => null);
+  return viejo ? [{ archivo: "edificio.json", nombre: viejo.data.nombre || "Edificio", unidades: (viejo.data.unidades || []).length }] : [];
+}
+const slug = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "edificio";
+const nuevoTopic = () => "portero-" + crypto.getRandomValues(new Uint32Array(3)).join("").slice(0, 18);
+
+async function adminLista(msg = "") {
+  app.innerHTML = `<section class="plate"><p class="status">Cargando edificios…</p></section>`;
+  let lista = [], error = "";
+  try { lista = await leerRegistro(); } catch (e) { error = e.message; }
+
+  app.innerHTML = `
+    <header class="head"><h1>Mis edificios</h1><p>Elegí un edificio para editar sus departamentos, o creá uno nuevo.</p></header>
+    ${error ? `<section class="box"><div class="status err">${esc(error)}</div></section>` : ""}
+    <section class="box">
+      <h2>Edificios (${lista.length})</h2>
+      ${lista.length ? `<div class="directory" style="margin-top:6px">
+        ${lista.map((e, i) => `
+          <a class="unit" href="${urlAdmin(e.archivo)}" style="text-decoration:none;grid-template-columns:1fr auto auto">
+            <b style="font-size:1.25rem">${esc(e.nombre || "Sin nombre")}</b>
+            <span>${e.unidades === 1 ? "1 depto." : (e.unidades ?? "?") + " deptos."}</span>
+            <i aria-hidden="true"></i>
+          </a>`).join("")}
+      </div>` : `<p style="margin:6px 0 0"><small>Todavía no hay edificios. Creá el primero.</small></p>`}
+      <div class="row-actions" style="justify-content:flex-start;margin-top:14px">
+        <button class="btn blue" id="nuevo" ${GH.cfg.token ? "" : "disabled"}>+ Nuevo edificio</button>
+      </div>
+      ${GH.cfg.token ? "" : `<small>Para crear o guardar edificios, conectá GitHub abajo.</small>`}
+    </section>
+    ${cajaGitHub(msg)}`;
+
+  bindGitHub(m => adminLista(m));
+  $("nuevo").onclick = async () => {
+    const nombre = (prompt("Nombre del edificio nuevo (ej: Edificio Libertad)") || "").trim();
+    if (!nombre) return;
+    const direccion = (prompt("Dirección (opcional)") || "").trim();
+    let base = "edificio-" + (slug(nombre).replace(/^edificio-?/, "") || "nuevo"), archivo = base + ".json", n = 2;
+    while (lista.some(e => e.archivo === archivo)) archivo = `${base}-${n++}.json`;
+    $("nuevo").disabled = true; $("nuevo").textContent = "Creando…";
+    try {
+      await GH.guardar(archivo, { nombre, direccion, unidades: [] }, `Portero: crear ${nombre}`);
+      await GH.guardar(REGISTRO, [...lista, { archivo, nombre, unidades: 0 }], `Portero: agregar ${nombre} a la lista`);
+      location.href = urlAdmin(archivo);
+    } catch (e) { alert("No se pudo crear: " + e.message); adminLista(); }
+  };
+}
+
+// ---- Edición de un edificio ----
+async function adminEdificio(archivo) {
+  let sucio = false, ed = null, msgOnline = "";
+  const KEY = "portero_borrador_" + archivo;
+
+  try { const r = await GH.leer(archivo); if (r) ed = r.data; if (GH.cfg.token) msgOnline = "✅ Conectado a GitHub."; }
+  catch (e) { msgOnline = "⚠️ " + e.message; }
+  try { const b = JSON.parse(LS(KEY)); if (b) { ed = b; sucio = true; } } catch {}
   if (!ed) ed = { nombre: "", direccion: "", unidades: [] };
   ed.unidades = ed.unidades || [];
 
@@ -458,47 +579,68 @@ async function admin() {
     unidades: ed.unidades.filter(u => (u.unidad || "").trim()).map(u => ({ unidad: u.unidad.trim(), nombre: (u.nombre || "").trim(), topic: u.topic })) });
 
   const marcarCambio = () => {
-    sucio = true; LS("portero_borrador_" + ARCHIVO, JSON.stringify(ed));
+    sucio = true; LS(KEY, JSON.stringify(ed));
     const b = $("save"); if (b) { b.disabled = false; b.textContent = "💾 Guardar cambios"; }
     const s = $("saveSt"); if (s) { s.className = "status"; s.textContent = "Hay cambios sin guardar."; }
   };
-  const nuevoTopic = () => "portero-" + crypto.getRandomValues(new Uint32Array(3)).join("").slice(0, 18);
 
   const guardarOnline = async () => {
     const s = $("saveSt"), b = $("save");
-    if (!gh.token) { s.className = "status err"; s.textContent = "Primero conectá GitHub (abajo)."; return; }
+    if (!GH.cfg.token) { s.className = "status err"; s.textContent = "Primero conectá GitHub (abajo)."; return; }
     b.disabled = true; s.className = "status"; s.textContent = "Guardando…";
     try {
-      // Pedimos el sha actual por si alguien más cambió el archivo
-      try { const r = await fetch(API() + "?t=" + Date.now(), { headers: hdr(), cache: "no-store" }); if (r.ok) sha = (await r.json()).sha; else if (r.status === 404) sha = null; } catch {}
-      const body = { message: "Portero: actualizar departamentos", content: b64enc(JSON.stringify(limpio(), null, 2)) };
-      if (sha) body.sha = sha;
-      const r = await fetch(API(), { method: "PUT", headers: { ...hdr(), "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      if (!r.ok) throw new Error(r.status === 401 ? "Token inválido o vencido." : r.status === 403 || r.status === 404 ? "El token no tiene permiso de escritura en este repo." : "Error " + r.status);
-      sha = (await r.json()).content.sha;
-      sucio = false; LS("portero_borrador_" + ARCHIVO, null);
+      const datos = limpio();
+      await GH.guardar(archivo, datos, `Portero: actualizar ${datos.nombre || archivo}`);
+      // Mantener al día la lista de edificios
+      const lista = await leerRegistro();
+      const i = lista.findIndex(e => e.archivo === archivo);
+      const item = { archivo, nombre: datos.nombre || "Sin nombre", unidades: datos.unidades.length };
+      if (i < 0) lista.push(item); else lista[i] = item;
+      await GH.guardar(REGISTRO, lista, "Portero: actualizar lista de edificios");
+      sucio = false; LS(KEY, null);
       s.className = "status ok"; s.textContent = "✅ Guardado. Los visitantes lo ven en 1-2 minutos.";
       b.textContent = "✔ Guardado";
-    } catch (e) {
-      s.className = "status err"; s.textContent = "No se pudo guardar: " + e.message; b.disabled = false;
-    }
+    } catch (e) { s.className = "status err"; s.textContent = "No se pudo guardar: " + e.message; b.disabled = false; }
+  };
+
+  const eliminar = async () => {
+    const nom = ed.nombre || archivo;
+    if (!GH.cfg.token) return alert("Primero conectá GitHub.");
+    if (!confirm(`¿Eliminar "${nom}"?\n\nSu QR deja de funcionar y los vecinos dejan de recibir avisos.`)) return;
+    if ((prompt(`Para confirmar, escribí el nombre del edificio:\n${nom}`) || "").trim() !== nom.trim()) return alert("El nombre no coincide. No se eliminó nada.");
+    try {
+      await GH.borrar(archivo, `Portero: eliminar ${nom}`);
+      const lista = (await leerRegistro()).filter(e => e.archivo !== archivo);
+      await GH.guardar(REGISTRO, lista, "Portero: actualizar lista de edificios");
+      LS(KEY, null); sucio = false;
+      location.href = urlAdmin();
+    } catch (e) { alert("No se pudo eliminar: " + e.message); }
   };
 
   window.onbeforeunload = () => sucio ? "Hay cambios sin guardar" : undefined;
 
-  const render = () => {
-    const urlQR = ARCHIVO === "edificio.json" ? BASE : `${BASE}?e=${encodeURIComponent(ARCHIVO)}`;
-    const qr = `https://api.qrserver.com/v1/create-qr-code/?size=600x600&margin=20&data=${encodeURIComponent(urlQR)}`;
-    app.innerHTML = `
-      <header class="head"><h1>Configurar portero</h1><p>Editá los departamentos y guardá: los visitantes ven los cambios en 1 o 2 minutos.</p></header>
+  const compartir = async (u) => {
+    const texto = `Hola! Para recibir el timbre de ${u.unidad} (${ed.nombre || "el edificio"}) con videollamada en tu celular:\n\n` +
+      `1) Instalá la app "ntfy" (gratis, Android y iPhone).\n2) Tocá "+" y suscribite a este canal:\n${u.topic}\n\n` +
+      `No compartas este código: es la llave de tu timbre.`;
+    try { if (navigator.share) return await navigator.share({ text: texto }); } catch { return; }
+    try { await navigator.clipboard.writeText(texto); alert("Mensaje copiado. Pegalo en WhatsApp para el vecino."); }
+    catch { prompt("Copiá este mensaje:", texto); }
+  };
 
-      <div class="box">
+  const render = () => {
+    const urlQR = urlVisitante(archivo), qr = qrDe(urlQR);
+    app.innerHTML = `
+      <a class="back" href="${urlAdmin()}" style="color:#d9e6e9;text-decoration:none">← Mis edificios</a>
+      <header class="head"><h1>${esc(ed.nombre || "Edificio nuevo")}</h1><p>Editá los departamentos y guardá: los visitantes ven los cambios en 1 o 2 minutos.</p></header>
+
+      <section class="box">
         <h2>Edificio</h2>
         <input id="edNom" placeholder="Nombre (ej: Edificio Libertad)" value="${esc(ed.nombre)}">
         <input id="edDir" placeholder="Dirección (opcional)" value="${esc(ed.direccion || "")}">
-      </div>
+      </section>
 
-      <div class="box">
+      <section class="box">
         <h2>Departamentos (${ed.unidades.length})</h2>
         <small>El nombre es opcional y se muestra a los visitantes. Cada departamento tiene su canal secreto de ntfy.</small>
         <div id="filas">
@@ -506,7 +648,7 @@ async function admin() {
             <div class="row">
               <input data-i="${i}" data-k="unidad" placeholder="1° A" value="${esc(u.unidad)}">
               <input data-i="${i}" data-k="nombre" placeholder="Nombre (opcional)" value="${esc(u.nombre || "")}">
-              <button class="btn sm red" data-del="${i}">✕</button>
+              <button class="btn sm red" data-del="${i}" aria-label="Borrar ${esc(u.unidad || "departamento")}">✕</button>
               <div style="grid-column:1/-1"><small>Canal: <code>${esc(u.topic)}</code></small>
                 <button class="btn sm ghost" data-share="${i}">Enviar al vecino</button></div>
             </div>`).join("")}
@@ -515,35 +657,29 @@ async function admin() {
           <button class="btn" id="add">+ Agregar</button>
           <button class="btn ghost" id="bulk">+ Agregar varios</button>
         </div>
-      </div>
+      </section>
 
       <div class="box savebar">
         <button class="btn blue" id="save" ${sucio ? "" : "disabled"}>${sucio ? "💾 Guardar cambios" : "✔ Todo guardado"}</button>
         <div class="status" id="saveSt">${sucio ? "Hay cambios sin guardar." : ""}</div>
       </div>
 
-      <div class="box">
-        <h2>Conexión con GitHub ${gh.token ? "✅" : ""}</h2>
-        <div class="status" style="font-weight:500">${esc(msgOnline)}</div>
-        ${gh.token ? `
-          <small>Repo: <code>${esc(gh.owner)}/${esc(gh.repo)}</code>. El token queda guardado solo en este celular.</small><br>
-          <button class="btn sm ghost" id="desc">Desconectar</button>` : `
-          <small>Se hace una sola vez. Creá un token en GitHub con acceso <b>solo a este repo</b> y permiso <b>Contents: Read and write</b>.</small><br>
-          <a class="btn sm" href="https://github.com/settings/personal-access-tokens/new" target="_blank">Crear token en GitHub</a>
-          <input id="ghOwner" placeholder="Usuario de GitHub" value="${esc(gh.owner)}" style="margin-top:10px">
-          <input id="ghRepo" placeholder="Nombre del repo" value="${esc(gh.repo)}">
-          <input id="ghTok" placeholder="Pegá el token (github_pat_…)" autocomplete="off">
-          <button class="btn blue" id="conectar">Conectar</button>`}
-      </div>
+      <section class="box" style="text-align:center">
+        <h2>QR de este edificio</h2>
+        <img id="qr" src="${qr}" alt="QR del portero de ${esc(ed.nombre || "este edificio")}">
+        <p style="margin:6px 0 8px"><code>${esc(urlQR)}</code></p>
+        <a class="btn" href="${qr}" download="portero-qr.png" target="_blank" rel="noopener">Descargar QR</a>
+        <a class="btn ghost" href="${urlQR}" target="_blank" rel="noopener">Probar</a>
+        <p style="margin:10px 0 0"><small>Cada edificio tiene su propio QR. No cambia aunque modifiques los departamentos.</small></p>
+      </section>
 
-      <div class="box" style="text-align:center">
-        <h2>QR del edificio</h2>
-        <img id="qr" src="${qr}" alt="QR del portero">
-        <code>${esc(urlQR)}</code><br>
-        <a class="btn" href="${qr}" download="portero-qr.png" target="_blank">Descargar QR</a>
-        <a class="btn ghost" href="${urlQR}" target="_blank">Probar</a>
-        <p style="margin:10px 0 0"><small>El QR no cambia nunca, aunque modifiques los departamentos.</small></p>
-      </div>`;
+      ${cajaGitHub(msgOnline)}
+
+      <section class="box">
+        <h2>Eliminar edificio</h2>
+        <small>Borra el edificio y su lista de departamentos. Su QR deja de funcionar.</small><br>
+        <button class="btn red sm" id="borrarEd" style="margin-top:10px">Eliminar este edificio</button>
+      </section>`;
 
     $("edNom").oninput = e => { ed.nombre = e.target.value; marcarCambio(); };
     $("edDir").oninput = e => { ed.direccion = e.target.value; marcarCambio(); };
@@ -563,41 +699,18 @@ async function admin() {
       marcarCambio(); render();
     };
     $("save").onclick = guardarOnline;
-    if ($("desc")) $("desc").onclick = () => { if (confirm("¿Desconectar GitHub de este celular?")) { LS("portero_token", null); gh.token = ""; msgOnline = ""; render(); } };
-    if ($("conectar")) $("conectar").onclick = async () => {
-      gh = { owner: $("ghOwner").value.trim(), repo: $("ghRepo").value.trim(), token: $("ghTok").value.trim() };
-      if (!gh.owner || !gh.repo || !gh.token) { alert("Completá usuario, repo y token."); return; }
-      $("conectar").disabled = true; $("conectar").textContent = "Verificando…";
-      try {
-        const r = await fetch(`https://api.github.com/repos/${gh.owner}/${gh.repo}`, { headers: hdr() });
-        if (!r.ok) throw new Error(r.status === 401 ? "Token inválido." : "No encuentro ese repo con ese token.");
-        const j = await r.json();
-        if (j.permissions && !j.permissions.push) throw new Error("El token no tiene permiso de escritura.");
-        LS("portero_token", gh.token); LS("portero_owner", gh.owner); LS("portero_repo", gh.repo);
-        msgOnline = "✅ Conectado a GitHub.";
-        // Si ya existe un archivo online y no hay cambios locales, lo cargamos
-        if (!sucio) { try { const on = await leerOnline(); if (on) { ed = on; ed.unidades = ed.unidades || []; } } catch {} }
-        else { try { await leerOnline(); } catch {} }
-      } catch (e) {
-        gh.token = ""; msgOnline = "⚠️ " + e.message;
-      }
-      render();
-    };
+    $("borrarEd").onclick = eliminar;
+    bindGitHub(m => { msgOnline = m; render(); });
   };
-
-  const compartir = async (u) => {
-    const texto = `Hola! Para recibir el timbre de ${u.unidad} (${ed.nombre || "el edificio"}) con videollamada en tu celular:\n\n` +
-      `1) Instalá la app "ntfy" (gratis, Android y iPhone).\n2) Tocá "+" y suscribite a este canal:\n${u.topic}\n\n` +
-      `No compartas este código: es la llave de tu timbre.`;
-    try { if (navigator.share) return await navigator.share({ text: texto }); } catch { return; }
-    try { await navigator.clipboard.writeText(texto); alert("Mensaje copiado. Pegalo en WhatsApp para el vecino."); }
-    catch { prompt("Copiá este mensaje:", texto); }
-  };
-
   render();
 }
 
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+
+// ---- Arranque (al final, cuando todo está definido) ----
+if (params.has("admin")) (params.get("e") ? adminEdificio(ARCHIVO) : adminLista());
+else if (params.get("atender")) atender();
+else portero();
 </script>
 </body>
 </html>
