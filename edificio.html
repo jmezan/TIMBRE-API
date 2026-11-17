@@ -533,7 +533,7 @@ function atender() {
       <p class="status" id="ast" role="status" aria-live="polite">Hay alguien en la puerta.</p>
       <button class="btn answer" id="abtn">Atender</button>
       <div id="ctrl" class="row-actions hide">
-        <button class="btn" id="mute">🎙️ Silenciar</button>
+        <button class="btn" id="mute">🎙️ Silenciar a la visita</button>
         <button class="btn red" id="colgar">Colgar</button>
       </div>
       ${params.get("u") ? `
@@ -554,6 +554,7 @@ function atender() {
   if (/^Llamada de /.test(n)) $("ast").textContent = "Te están llamando.";
   let peer, stream, call, visitaActiva = false, pActiva = false;
   // El micrófono se comparte entre la visita y la llamada a portería: se apaga cuando no queda ninguna
+  let pStream = null;   // copia del micrófono solo para la llamada a portería (se silencia aparte)
   const micLibre = () => { if (!visitaActiva && !pActiva) { try { stream && stream.getTracks().forEach(x => x.stop()); } catch {} stream = null; } };
   const fin = (t) => {
     visitaActiva = false;
@@ -591,10 +592,18 @@ function atender() {
   };
   $("colgar").onclick = () => fin("Colgaste la llamada.");
   if ($("abrir")) puertaAtender(params.get("e") || "edificio.json", params.get("u"));
+  // Micrófono hacia la visita (independiente del de portería)
+  let silencioAuto = false;   // true si se silenció solo al conectar con portería
+  const micVisita = (activo) => {
+    if (!stream) return;
+    stream.getAudioTracks().forEach(t => t.enabled = activo);
+    $("mute").textContent = activo ? "🎙️ Silenciar a la visita" : "🔇 La visita no te escucha";
+    $("mute").classList.toggle("red", !activo);
+  };
   $("mute").onclick = () => {
     if (!stream) return;
-    const t = stream.getAudioTracks()[0]; t.enabled = !t.enabled;
-    $("mute").textContent = t.enabled ? "🎙️ Silenciar" : "🔇 Activar micrófono";
+    silencioAuto = false;
+    micVisita(!stream.getAudioTracks()[0].enabled);
   };
 
   // ---- Llamar a portería sin salir de esta pantalla (solo audio, se puede en medio de la visita) ----
@@ -604,6 +613,9 @@ function atender() {
     clearTimeout(pTimeout); pActiva = false;
     try { pPeer && pPeer.destroy(); } catch {}
     pPeer = null; $("portAudio").srcObject = null;
+    try { pStream && pStream.getTracks().forEach(x => x.stop()); } catch {}
+    pStream = null;
+    if (silencioAuto) { silencioAuto = false; micVisita(true); }   // vuelve a escucharte la visita
     $("llamarPort").textContent = `📞 Llamar a ${port.unidad}`; $("llamarPort").classList.remove("red");
     pEst(t || ""); micLibre();
   };
@@ -628,8 +640,15 @@ function atender() {
     pPeer.on("connection", (conn) => {
       clearTimeout(pTimeout); pEst("Conectando…");
       const iniciar = () => {
-        const c = pPeer.call(conn.peer, stream);
-        c.on("stream", (rem) => { const a = $("portAudio"); a.srcObject = rem; a.play().catch(() => {}); pEst(`🟢 Hablando con ${port.unidad}`, "ok"); });
+        // Copia del micrófono siempre activa para portería, aunque la visita esté silenciada
+        pStream = new MediaStream(stream.getAudioTracks().map(t => { const c = t.clone(); c.enabled = true; return c; }));
+        const c = pPeer.call(conn.peer, pStream);
+        c.on("stream", (rem) => {
+          const a = $("portAudio"); a.srcObject = rem; a.play().catch(() => {});
+          // Mientras hablás con portería, la visita no te escucha (se puede cambiar con el botón)
+          if (visitaActiva && stream.getAudioTracks()[0]?.enabled) { silencioAuto = true; micVisita(false); }
+          pEst(visitaActiva ? `🟢 Hablando con ${port.unidad}. La visita no te escucha.` : `🟢 Hablando con ${port.unidad}`, "ok");
+        });
         c.on("close", () => cortarPort(`${port.unidad} cortó.`));
       };
       if (conn.open) iniciar(); else conn.on("open", iniciar);
